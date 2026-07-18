@@ -1,156 +1,267 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { onMount } from "svelte";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  type Account = { email: string; display_name: string };
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  let accounts = $state<Account[]>([]);
+  let busy = $state(false);
+  let status = $state("");
+  let authUrl = $state("");
+  let manualUrl = $state("");
+
+  async function refresh() {
+    accounts = await invoke<Account[]>("list_accounts");
   }
+
+  async function connect() {
+    busy = true;
+    authUrl = "";
+    manualUrl = "";
+    status = "Autorize no navegador. No WSL, cole a URL de redirect abaixo.";
+    try {
+      authUrl = await invoke<string>("start_auth");
+    } catch (e) {
+      status = `Erro ao iniciar: ${e}`;
+      busy = false;
+    }
+    // A conclusão chega por evento (automático) ou via finishManual (colar URL).
+  }
+
+  async function finishManual() {
+    if (!manualUrl.trim()) return;
+    status = "Concluindo…";
+    try {
+      const acc = await invoke<Account>("finish_auth_manual", { redirectUrl: manualUrl });
+      onConnected(acc);
+    } catch (e) {
+      status = `Erro: ${e}`;
+    }
+  }
+
+  async function onConnected(acc: Account) {
+    status = `Conta conectada: ${acc.email}`;
+    authUrl = "";
+    manualUrl = "";
+    busy = false;
+    await refresh();
+  }
+
+  async function remove(email: string) {
+    await invoke("remove_account", { email });
+    status = `Removida: ${email}`;
+    await refresh();
+  }
+
+  async function test(email: string) {
+    status = `Testando ${email}…`;
+    try {
+      const r = await invoke<string>("test_account", { email });
+      status = `${email}: ${r}`;
+    } catch (e) {
+      status = `Erro: ${e}`;
+    }
+  }
+
+  onMount(() => {
+    refresh();
+    const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
+    const un2 = listen<string>("auth-error", (e) => {
+      status = `Erro: ${e.payload}`;
+      busy = false;
+    });
+    return () => {
+      un1.then((f) => f());
+      un2.then((f) => f());
+    };
+  });
 </script>
 
 <main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+  <h1>Calendar Notifier</h1>
+  <p class="subtitle">Contas Google conectadas</p>
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
-  </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+  <button onclick={connect} disabled={busy}>
+    {busy ? "Conectando…" : "+ Conectar conta"}
+  </button>
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
+  {#if authUrl}
+    <div class="auth-flow">
+      <p class="step"><b>1.</b> Abra o link e autorize no navegador:</p>
+      <button class="ghost" onclick={() => openUrl(authUrl)}>Abrir link de autorização</button>
+      <textarea class="url-box" readonly rows="2">{authUrl}</textarea>
+
+      <p class="step">
+        <b>2.</b> Após autorizar, se o navegador mostrar erro em
+        <code>127.0.0.1</code> (normal no WSL), copie a URL da barra de endereço
+        e cole aqui:
+      </p>
+      <textarea
+        class="url-box"
+        bind:value={manualUrl}
+        rows="2"
+        placeholder="http://127.0.0.1:PORTA/?state=...&code=..."
+      ></textarea>
+      <button onclick={finishManual} disabled={!manualUrl.trim()}>Concluir conexão</button>
+    </div>
+  {/if}
+
+  {#if accounts.length === 0}
+    <p class="empty">Nenhuma conta conectada ainda.</p>
+  {:else}
+    <ul class="accounts">
+      {#each accounts as acc (acc.email)}
+        <li>
+          <div class="acc-info">
+            <span class="name">{acc.display_name}</span>
+            <span class="email">{acc.email}</span>
+          </div>
+          <div class="acc-actions">
+            <button class="ghost" onclick={() => test(acc.email)}>Testar</button>
+            <button class="danger" onclick={() => remove(acc.email)}>Remover</button>
+          </div>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  {#if status}
+    <p class="status">{status}</p>
+  {/if}
 </main>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
   :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    color: #0f0f0f;
+    background-color: #f6f6f6;
   }
-
-  a:hover {
-    color: #24c8db;
+  .container {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
-
-  input,
+  h1 {
+    margin: 0;
+    font-size: 1.6rem;
+  }
+  .subtitle {
+    margin: 0;
+    opacity: 0.7;
+  }
   button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 0.5em 1em;
+    font-size: 0.95em;
+    font-weight: 500;
+    font-family: inherit;
+    color: #fff;
+    background-color: #396cd8;
+    cursor: pointer;
+    transition: filter 0.2s;
   }
-  button:active {
-    background-color: #0f0f0f69;
+  button:hover:not(:disabled) {
+    filter: brightness(1.08);
   }
-}
-
+  button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  button.ghost {
+    background: transparent;
+    color: #396cd8;
+    border-color: #396cd8;
+  }
+  button.danger {
+    background: transparent;
+    color: #c0392b;
+    border-color: #c0392b;
+  }
+  .accounts {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .accounts li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.8rem;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+  .acc-info {
+    display: flex;
+    flex-direction: column;
+  }
+  .name {
+    font-weight: 600;
+  }
+  .email {
+    font-size: 0.85em;
+    opacity: 0.65;
+  }
+  .acc-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .empty,
+  .hint,
+  .status {
+    font-size: 0.9em;
+    opacity: 0.8;
+  }
+  .url-box {
+    width: 100%;
+    font-size: 0.75em;
+    font-family: monospace;
+    resize: vertical;
+    border-radius: 6px;
+    padding: 0.4rem;
+    box-sizing: border-box;
+  }
+  .auth-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.75rem;
+    border: 1px dashed #888;
+    border-radius: 10px;
+  }
+  .auth-flow .step {
+    margin: 0;
+    font-size: 0.9em;
+  }
+  .auth-flow code {
+    font-size: 0.85em;
+  }
+  .status {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: #eef;
+    border-radius: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color: #f6f6f6;
+      background-color: #2f2f2f;
+    }
+    .accounts li {
+      background: #3a3a3a;
+      box-shadow: none;
+    }
+    .status {
+      background: #33384d;
+    }
+  }
 </style>

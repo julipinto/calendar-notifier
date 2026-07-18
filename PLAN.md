@@ -110,9 +110,20 @@ calendar-notifier/
 - `create-tauri-app` (Svelte + TS), plugins: notification, sql, opener.
 - App abre, tray aparece, "Hello".
 
-**Fase 1 — Auth OAuth (1 conta)**
-- Guia do Google Cloud (client ID). Fluxo PKCE + loopback. Token no keychain.
-- Comando `connect_account` e listagem de contas na UI.
+**Fase 1 — Auth OAuth (1 conta)** ✅
+- Fluxo OAuth PKCE + loopback (`auth.rs`); conclusão automática (Windows) via
+  evento `account-connected` + fallback manual (colar URL de redirect) p/ WSL.
+- Refresh token em `tokens.json` (0600) — `secrets.rs`; conta em SQLite —
+  `store.rs`. Credenciais via `include_str!` (`config.rs`, gitignored).
+- UI: conectar / listar / remover / testar (conta a Calendar API real).
+- **Gotchas do Google Cloud (para conectar contas):**
+  1. Ativar a **Google Calendar API** no projeto (senão 403 `accessNotConfigured`).
+  2. Registrar o escopo `calendar.readonly` na tela de consentimento via
+     "Adicionar escopos manualmente" (senão 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`).
+  3. App em "Testing" → refresh token expira em 7 dias; publicar (Production)
+     para uso contínuo.
+- **WSL:** loopback `127.0.0.1` às vezes funciona (localhost forwarding), às
+  vezes dá `ERR_CONNECTION_REFUSED` → usar o fallback de colar a URL.
 
 **Fase 2 — Sync**
 - Listar calendários da conta, marcar quais acompanhar.
@@ -131,6 +142,18 @@ calendar-notifier/
 **Fase 5 — Polimento**
 - Reconexão/refresh robusto, tratamento de 410, start-on-login, ícones,
   filtros (ignorar all-day, recusados), testes.
+
+## Problemas conhecidos (a retomar)
+
+- **Abrir navegador automático não funciona no WSL** (dev). `open::that` /
+  opener usam `xdg-open`, que não alcança o navegador do Windows. Fallback já
+  implementado: o app mostra a URL de autorização copiável na UI.
+  - Correção futura p/ dev: detectar WSL e usar `wslview` (pacote `wslu`) ou
+    `cmd.exe /c start` / `powershell.exe Start-Process`.
+  - **No build Windows nativo isso não é problema** — `open` abre o navegador
+    normalmente. É só um incômodo do dev-em-WSL.
+- O redirect do OAuth vai pra `127.0.0.1:<porta>` dentro do WSL; o navegador do
+  Windows alcança via espelhamento de localhost do WSL2 (a validar no teste).
 
 ## Fora do escopo da v1
 - Visão de calendário completa (dia/semana/mês).
