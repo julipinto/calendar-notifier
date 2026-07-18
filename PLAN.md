@@ -136,9 +136,18 @@ calendar-notifier/
 - UI: expandir calendários + checkbox, "recarregar calendários",
   "sincronizar agora", lista de próximos eventos (dia-inteiro renderizado em UTC).
 
-**Fase 3 — Notificações + Scheduler**
-- Antecedência global nas configs. Loop de tick + dedup.
-- Notificação do sistema com título/horário do evento.
+**Fase 3 — Notificações + Scheduler** ✅
+- `scheduler.rs`: loop (tick 30s) que dispara notificação do SO p/ eventos
+  entrando na janela `start - lead`, com dedup (`notified`), ignorando dia-inteiro.
+- Antecedência global (`lead_minutes`, default 10) configurável na UI.
+- `replace_events` preserva o `notified` entre syncs (reseta se o horário muda).
+- Botão "testar notificação" + campo de antecedência na UI.
+- **Correção importante:** removida a feature `tokio` do zbus (workaround
+  redundante da Fase 0). Ela fazia a chamada bloqueante do `notify-rust` rodar
+  dentro do runtime tokio → `show()` falhava calado. Com async-io (padrão)
+  funciona. Patch do `command.rs` mantido.
+- **Dev WSL:** sem daemon de notificação nativo; instalamos `dunst` num D-Bus de
+  sessão dedicado. No Windows nativo o toast é nativo.
 
 **Fase 4 — Multi-conta + Tray**
 - Conectar N contas; agregação de eventos.

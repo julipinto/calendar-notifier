@@ -2,8 +2,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_notification::NotificationExt;
 
-use crate::{auth, config, google, secrets, store};
+use crate::{auth, config, google, scheduler, secrets, store};
 
 /// Obtém um access_token novo para a conta (via refresh_token).
 async fn access_token_for(email: &str) -> Result<String, String> {
@@ -216,14 +217,47 @@ pub fn account_calendars(email: String) -> Result<Vec<store::Calendar>, String> 
     store::list_calendars(&email).map_err(|e| e.to_string())
 }
 
-/// Marca/desmarca um calendário para acompanhar.
+/// Marca/desmarca um calendário para acompanhar. Ao desmarcar, remove os
+/// eventos dele do cache (para não notificar de calendário que não acompanho).
 #[tauri::command]
 pub fn set_calendar_selected(
     email: String,
     calendar_id: String,
     selected: bool,
 ) -> Result<(), String> {
-    store::set_calendar_selected(&email, &calendar_id, selected).map_err(|e| e.to_string())
+    store::set_calendar_selected(&email, &calendar_id, selected).map_err(|e| e.to_string())?;
+    if !selected {
+        store::delete_events_for_calendar(&email, &calendar_id).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ---------- Fase 3: configurações e notificações ----------
+
+/// Antecedência global das notificações (minutos antes do evento).
+#[tauri::command]
+pub fn get_lead_minutes() -> Result<i64, String> {
+    store::get_setting("lead_minutes", scheduler::DEFAULT_LEAD)
+        .map_err(|e| e.to_string())?
+        .parse()
+        .map_err(|_| "valor de antecedência inválido".to_string())
+}
+
+#[tauri::command]
+pub fn set_lead_minutes(minutes: i64) -> Result<(), String> {
+    let m = minutes.clamp(0, 1440);
+    store::set_setting("lead_minutes", &m.to_string()).map_err(|e| e.to_string())
+}
+
+/// Dispara uma notificação de teste (para validar o canal do SO).
+#[tauri::command]
+pub fn test_notification(app: AppHandle) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title("Calendar Notifier")
+        .body("Notificação de teste ✓")
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 /// Sincroniza os eventos (janela de 30 dias) de todos os calendários marcados.

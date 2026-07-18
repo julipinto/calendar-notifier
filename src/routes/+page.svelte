@@ -30,6 +30,7 @@
   let status = $state("");
   let authUrl = $state("");
   let manualUrl = $state("");
+  let leadMinutes = $state(10);
 
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
@@ -42,6 +43,24 @@
 
   async function loadEvents() {
     events = await invoke<CalEvent[]>("list_events");
+  }
+
+  async function loadLead() {
+    leadMinutes = await invoke<number>("get_lead_minutes");
+  }
+
+  async function saveLead() {
+    await invoke("set_lead_minutes", { minutes: Number(leadMinutes) });
+    status = `Antecedência salva: ${leadMinutes} min antes.`;
+  }
+
+  async function testNotif() {
+    try {
+      await invoke("test_notification");
+      status = "Notificação de teste enviada (veja no seu SO).";
+    } catch (e) {
+      status = `Erro na notificação: ${e}`;
+    }
   }
 
   async function connect() {
@@ -142,6 +161,7 @@
   onMount(() => {
     loadAccounts();
     loadEvents();
+    loadLead();
     const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
     const un2 = listen<string>("auth-error", (e) => {
       status = `Erro: ${e.payload}`;
@@ -184,6 +204,18 @@
       <button onclick={finishManual} disabled={!manualUrl.trim()}>Concluir conexão</button>
     </div>
   {/if}
+
+  <section class="settings">
+    <h2>Notificações</h2>
+    <div class="lead-row">
+      <label>
+        Avisar
+        <input type="number" min="0" max="1440" bind:value={leadMinutes} onchange={saveLead} />
+        minutos antes
+      </label>
+      <button class="ghost" onclick={testNotif}>Testar notificação</button>
+    </div>
+  </section>
 
   {#if accounts.length > 0}
     <section>
@@ -433,6 +465,24 @@
     border-radius: 6px;
     padding: 0.4rem;
     box-sizing: border-box;
+  }
+  .lead-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .lead-row label {
+    font-size: 0.95em;
+  }
+  .lead-row input[type="number"] {
+    width: 4rem;
+    padding: 0.3em 0.4em;
+    border-radius: 6px;
+    border: 1px solid #bbb;
+    font-size: 0.95em;
+    text-align: center;
   }
   @media (prefers-color-scheme: dark) {
     :root {

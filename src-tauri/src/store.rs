@@ -46,9 +46,43 @@ pub fn init() -> Result<()> {
             all_day       INTEGER NOT NULL DEFAULT 0,
             status        TEXT,
             html_link     TEXT,
+            notified      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (account_email, calendar_id, id)
         );
-        CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_ts);",
+        CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_ts);
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )?;
+    // migração p/ bancos criados antes da coluna `notified` (ignora se já existe)
+    let _ = c.execute(
+        "ALTER TABLE events ADD COLUMN notified INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    Ok(())
+}
+
+// ---------- settings ----------
+
+pub fn get_setting(key: &str, default: &str) -> Result<String> {
+    let c = conn()?;
+    let v: Option<String> = c
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [key],
+            |r| r.get(0),
+        )
+        .ok();
+    Ok(v.unwrap_or_else(|| default.to_string()))
+}
+
+pub fn set_setting(key: &str, value: &str) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
     )?;
     Ok(())
 }
@@ -188,23 +222,30 @@ pub struct Event {
     pub html_link: String,
 }
 
-/// Substitui todos os eventos de um calendário pelos recém-buscados (numa
-/// transação). Simples e correto para a janela deslizante de 30 dias.
+/// Sincroniza os eventos de um calendário: faz upsert dos recém-buscados
+/// (preservando o flag `notified`, mas resetando-o se o horário mudou) e
+/// remove os que não vieram mais (evento apagado/movido pra fora da janela).
+/// Tudo numa transação.
 pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) -> Result<()> {
     let mut c = conn()?;
     let tx = c.transaction()?;
-    tx.execute(
-        "DELETE FROM events WHERE account_email = ?1 AND calendar_id = ?2",
-        rusqlite::params![account_email, calendar_id],
-    )?;
     {
-        let mut stmt = tx.prepare(
+        let mut up = tx.prepare(
             "INSERT INTO events
-             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link, notified)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
+             ON CONFLICT(account_email, calendar_id, id) DO UPDATE SET
+                title = excluded.title,
+                end_ts = excluded.end_ts,
+                all_day = excluded.all_day,
+                status = excluded.status,
+                html_link = excluded.html_link,
+                -- se o horário de início mudou, volta a poder notificar
+                notified = CASE WHEN events.start_ts != excluded.start_ts THEN 0 ELSE events.notified END,
+                start_ts = excluded.start_ts",
         )?;
         for e in events {
-            stmt.execute(rusqlite::params![
+            up.execute(rusqlite::params![
                 e.id,
                 calendar_id,
                 account_email,
@@ -216,8 +257,83 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
                 e.html_link,
             ])?;
         }
+        // remove eventos que não vieram nesta sincronização
+        let keep: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
+        let placeholders = if keep.is_empty() {
+            "''".to_string()
+        } else {
+            keep.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+        };
+        let sql = format!(
+            "DELETE FROM events WHERE account_email = ? AND calendar_id = ? AND id NOT IN ({placeholders})"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&account_email, &calendar_id];
+        for k in &keep {
+            params.push(k);
+        }
+        tx.execute(&sql, params.as_slice())?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// Remove todos os eventos de um calendário (usado ao desmarcar).
+pub fn delete_events_for_calendar(account_email: &str, calendar_id: &str) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "DELETE FROM events WHERE account_email = ?1 AND calendar_id = ?2",
+        rusqlite::params![account_email, calendar_id],
+    )?;
+    Ok(())
+}
+
+/// Evento pronto para notificar.
+#[derive(Clone)]
+pub struct DueEvent {
+    pub account_email: String,
+    pub calendar_id: String,
+    pub id: String,
+    pub title: String,
+    pub start_ts: i64,
+}
+
+/// Eventos (não dia-inteiro, ainda não notificados) cuja janela de aviso já
+/// chegou: `start - lead <= agora < start`.
+pub fn due_notifications(lead_minutes: i64) -> Result<Vec<DueEvent>> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let lead = lead_minutes * 60;
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT account_email, calendar_id, id, title, start_ts
+         FROM events
+         WHERE all_day = 0 AND notified = 0
+           AND (start_ts - ?1) <= ?2 AND start_ts > ?2
+         ORDER BY start_ts",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![lead, now], |r| {
+            Ok(DueEvent {
+                account_email: r.get(0)?,
+                calendar_id: r.get(1)?,
+                id: r.get(2)?,
+                title: r.get(3)?,
+                start_ts: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn mark_notified(account_email: &str, calendar_id: &str, id: &str) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "UPDATE events SET notified = 1
+         WHERE account_email = ?1 AND calendar_id = ?2 AND id = ?3",
+        rusqlite::params![account_email, calendar_id, id],
+    )?;
     Ok(())
 }
 

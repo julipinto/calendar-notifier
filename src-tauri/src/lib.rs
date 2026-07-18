@@ -2,6 +2,7 @@ mod auth;
 mod commands;
 mod config;
 mod google;
+mod scheduler;
 mod secrets;
 mod store;
 
@@ -12,8 +13,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(commands::AuthState::default())
-        .setup(|_app| {
+        .setup(|app| {
             store::init().expect("falha ao inicializar o banco de dados");
+            scheduler::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -27,6 +29,9 @@ pub fn run() {
             commands::set_calendar_selected,
             commands::sync_now,
             commands::list_events,
+            commands::get_lead_minutes,
+            commands::set_lead_minutes,
+            commands::test_notification,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
