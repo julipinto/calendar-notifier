@@ -6,5 +6,16 @@ node_modules
 .env
 .env.*
 !.env.example
+
+# Credenciais e segredos — NUNCA commitar
+google_client.json
+client_secret*.json
+*credentials*.json
+*.secret
+tokens.json
+# banco local com cache/tokens
+*.db
+*.sqlite
+*.sqlite3
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
