@@ -1,6 +1,7 @@
 mod auth;
 mod commands;
 mod config;
+mod google;
 mod secrets;
 mod store;
 
@@ -21,6 +22,11 @@ pub fn run() {
             commands::list_accounts,
             commands::remove_account,
             commands::test_account,
+            commands::refresh_calendars,
+            commands::account_calendars,
+            commands::set_calendar_selected,
+            commands::sync_now,
+            commands::list_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

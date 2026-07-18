@@ -5,15 +5,43 @@
   import { onMount } from "svelte";
 
   type Account = { email: string; display_name: string };
+  type Calendar = {
+    id: string;
+    account_email: string;
+    summary: string;
+    selected: boolean;
+    is_primary: boolean;
+  };
+  type CalEvent = {
+    id: string;
+    account_email: string;
+    title: string;
+    start_ts: number;
+    all_day: boolean;
+    html_link: string;
+  };
 
   let accounts = $state<Account[]>([]);
+  let calendars = $state<Record<string, Calendar[]>>({});
+  let expanded = $state<Record<string, boolean>>({});
+  let events = $state<CalEvent[]>([]);
   let busy = $state(false);
+  let syncing = $state(false);
   let status = $state("");
   let authUrl = $state("");
   let manualUrl = $state("");
 
-  async function refresh() {
+  async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
+    for (const a of accounts) await loadCalendars(a.email);
+  }
+
+  async function loadCalendars(email: string) {
+    calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
+  }
+
+  async function loadEvents() {
+    events = await invoke<CalEvent[]>("list_events");
   }
 
   async function connect() {
@@ -27,7 +55,6 @@
       status = `Erro ao iniciar: ${e}`;
       busy = false;
     }
-    // A conclusão chega por evento (automático) ou via finishManual (colar URL).
   }
 
   async function finishManual() {
@@ -42,31 +69,79 @@
   }
 
   async function onConnected(acc: Account) {
-    status = `Conta conectada: ${acc.email}`;
+    status = `Conta conectada: ${acc.email}. Sincronizando…`;
     authUrl = "";
     manualUrl = "";
     busy = false;
-    await refresh();
+    await loadAccounts();
+    await syncNow();
   }
 
   async function remove(email: string) {
     await invoke("remove_account", { email });
     status = `Removida: ${email}`;
-    await refresh();
+    await loadAccounts();
+    await loadEvents();
   }
 
-  async function test(email: string) {
-    status = `Testando ${email}…`;
+  async function reloadCalendars(email: string) {
+    status = `Atualizando calendários de ${email}…`;
     try {
-      const r = await invoke<string>("test_account", { email });
-      status = `${email}: ${r}`;
+      calendars[email] = await invoke<Calendar[]>("refresh_calendars", { email });
+      status = "Calendários atualizados.";
     } catch (e) {
       status = `Erro: ${e}`;
     }
   }
 
+  async function toggleCalendar(cal: Calendar) {
+    await invoke("set_calendar_selected", {
+      email: cal.account_email,
+      calendarId: cal.id,
+      selected: !cal.selected,
+    });
+    await loadCalendars(cal.account_email);
+  }
+
+  async function syncNow() {
+    syncing = true;
+    status = "Sincronizando eventos…";
+    try {
+      const n = await invoke<number>("sync_now");
+      status = `${n} evento(s) sincronizado(s).`;
+      await loadEvents();
+    } catch (e) {
+      status = `Erro na sincronização: ${e}`;
+    } finally {
+      syncing = false;
+    }
+  }
+
+  function fmtWhen(e: CalEvent): string {
+    const d = new Date(e.start_ts * 1000);
+    if (e.all_day)
+      // dia inteiro é guardado como meia-noite UTC — renderiza em UTC p/ não
+      // "voltar" um dia no fuso local.
+      return (
+        d.toLocaleDateString("pt-BR", {
+          weekday: "short",
+          day: "2-digit",
+          month: "short",
+          timeZone: "UTC",
+        }) + " · dia inteiro"
+      );
+    return d.toLocaleString("pt-BR", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
   onMount(() => {
-    refresh();
+    loadAccounts();
+    loadEvents();
     const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
     const un2 = listen<string>("auth-error", (e) => {
       status = `Erro: ${e.payload}`;
@@ -80,8 +155,12 @@
 </script>
 
 <main class="container">
-  <h1>Calendar Notifier</h1>
-  <p class="subtitle">Contas Google conectadas</p>
+  <header>
+    <h1>Calendar Notifier</h1>
+    <button class="sync" onclick={syncNow} disabled={syncing || accounts.length === 0}>
+      {syncing ? "Sincronizando…" : "↻ Sincronizar agora"}
+    </button>
+  </header>
 
   <button onclick={connect} disabled={busy}>
     {busy ? "Conectando…" : "+ Conectar conta"}
@@ -92,11 +171,9 @@
       <p class="step"><b>1.</b> Abra o link e autorize no navegador:</p>
       <button class="ghost" onclick={() => openUrl(authUrl)}>Abrir link de autorização</button>
       <textarea class="url-box" readonly rows="2">{authUrl}</textarea>
-
       <p class="step">
-        <b>2.</b> Após autorizar, se o navegador mostrar erro em
-        <code>127.0.0.1</code> (normal no WSL), copie a URL da barra de endereço
-        e cole aqui:
+        <b>2.</b> Se o navegador der erro em <code>127.0.0.1</code> (normal no WSL),
+        copie a URL da barra de endereço e cole aqui:
       </p>
       <textarea
         class="url-box"
@@ -108,24 +185,68 @@
     </div>
   {/if}
 
-  {#if accounts.length === 0}
-    <p class="empty">Nenhuma conta conectada ainda.</p>
-  {:else}
-    <ul class="accounts">
-      {#each accounts as acc (acc.email)}
-        <li>
-          <div class="acc-info">
-            <span class="name">{acc.display_name}</span>
-            <span class="email">{acc.email}</span>
-          </div>
-          <div class="acc-actions">
-            <button class="ghost" onclick={() => test(acc.email)}>Testar</button>
-            <button class="danger" onclick={() => remove(acc.email)}>Remover</button>
-          </div>
-        </li>
-      {/each}
-    </ul>
+  {#if accounts.length > 0}
+    <section>
+      <h2>Contas</h2>
+      <ul class="accounts">
+        {#each accounts as acc (acc.email)}
+          <li>
+            <div class="acc-row">
+              <div class="acc-info">
+                <span class="name">{acc.display_name}</span>
+                <span class="email">{acc.email}</span>
+              </div>
+              <div class="acc-actions">
+                <button class="ghost" onclick={() => (expanded[acc.email] = !expanded[acc.email])}>
+                  {expanded[acc.email] ? "▾" : "▸"} Calendários
+                </button>
+                <button class="danger" onclick={() => remove(acc.email)}>Remover</button>
+              </div>
+            </div>
+
+            {#if expanded[acc.email]}
+              <div class="cals">
+                {#each calendars[acc.email] ?? [] as cal (cal.id)}
+                  <label class="cal">
+                    <input
+                      type="checkbox"
+                      checked={cal.selected}
+                      onchange={() => toggleCalendar(cal)}
+                    />
+                    <span>{cal.summary || cal.id}</span>
+                    {#if cal.is_primary}<span class="badge">principal</span>{/if}
+                  </label>
+                {/each}
+                <button class="ghost tiny" onclick={() => reloadCalendars(acc.email)}>
+                  Recarregar calendários
+                </button>
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </section>
   {/if}
+
+  <section>
+    <h2>Próximos eventos</h2>
+    {#if events.length === 0}
+      <p class="empty">Nenhum evento em cache. Conecte uma conta e sincronize.</p>
+    {:else}
+      <ul class="events">
+        {#each events as ev (ev.account_email + ev.id)}
+          <li>
+            <span class="when">{fmtWhen(ev)}</span>
+            <span class="title">
+              {#if ev.html_link}
+                <a href={ev.html_link} onclick={(e) => { e.preventDefault(); openUrl(ev.html_link); }}>{ev.title}</a>
+              {:else}{ev.title}{/if}
+            </span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
 
   {#if status}
     <p class="status">{status}</p>
@@ -139,26 +260,32 @@
     background-color: #f6f6f6;
   }
   .container {
-    max-width: 560px;
+    max-width: 620px;
     margin: 0 auto;
-    padding: 2rem 1.5rem;
+    padding: 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
   }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
   h1 {
     margin: 0;
-    font-size: 1.6rem;
+    font-size: 1.5rem;
   }
-  .subtitle {
-    margin: 0;
+  h2 {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1rem;
     opacity: 0.7;
   }
   button {
     border-radius: 8px;
     border: 1px solid transparent;
     padding: 0.5em 1em;
-    font-size: 0.95em;
+    font-size: 0.9em;
     font-weight: 500;
     font-family: inherit;
     color: #fff;
@@ -170,8 +297,11 @@
     filter: brightness(1.08);
   }
   button:disabled {
-    opacity: 0.6;
+    opacity: 0.55;
     cursor: default;
+  }
+  button.sync {
+    background: #2e8b57;
   }
   button.ghost {
     background: transparent;
@@ -183,52 +313,105 @@
     color: #c0392b;
     border-color: #c0392b;
   }
-  .accounts {
+  button.tiny {
+    font-size: 0.8em;
+    padding: 0.3em 0.6em;
+    align-self: flex-start;
+  }
+  .accounts,
+  .events {
     list-style: none;
     padding: 0;
-    margin: 0.5rem 0 0;
+    margin: 0;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
   .accounts li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
     padding: 0.6rem 0.8rem;
     background: #fff;
     border-radius: 10px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   }
+  .acc-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
   .acc-info {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
   .name {
     font-weight: 600;
   }
   .email {
-    font-size: 0.85em;
+    font-size: 0.82em;
     opacity: 0.65;
   }
   .acc-actions {
     display: flex;
     gap: 0.4rem;
+    flex-shrink: 0;
+  }
+  .cals {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid #eee;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .cal {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9em;
+  }
+  .badge {
+    font-size: 0.7em;
+    background: #396cd8;
+    color: #fff;
+    padding: 0.05em 0.4em;
+    border-radius: 6px;
+  }
+  .events li {
+    display: flex;
+    flex-direction: column;
+    padding: 0.5rem 0.7rem;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+  .when {
+    font-size: 0.78em;
+    opacity: 0.6;
+    text-transform: capitalize;
+  }
+  .title {
+    font-weight: 500;
+  }
+  .title a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .title a:hover {
+    text-decoration: underline;
   }
   .empty,
-  .hint,
   .status {
     font-size: 0.9em;
-    opacity: 0.8;
+    opacity: 0.85;
   }
-  .url-box {
-    width: 100%;
-    font-size: 0.75em;
-    font-family: monospace;
-    resize: vertical;
-    border-radius: 6px;
-    padding: 0.4rem;
-    box-sizing: border-box;
+  .status {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: #eef;
+    border-radius: 8px;
   }
   .auth-flow {
     display: flex;
@@ -242,23 +425,27 @@
     margin: 0;
     font-size: 0.9em;
   }
-  .auth-flow code {
-    font-size: 0.85em;
-  }
-  .status {
-    margin-top: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    background: #eef;
-    border-radius: 8px;
+  .url-box {
+    width: 100%;
+    font-size: 0.75em;
+    font-family: monospace;
+    resize: vertical;
+    border-radius: 6px;
+    padding: 0.4rem;
+    box-sizing: border-box;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       color: #f6f6f6;
       background-color: #2f2f2f;
     }
-    .accounts li {
+    .accounts li,
+    .events li {
       background: #3a3a3a;
       box-shadow: none;
+    }
+    .cals {
+      border-top-color: #4a4a4a;
     }
     .status {
       background: #33384d;

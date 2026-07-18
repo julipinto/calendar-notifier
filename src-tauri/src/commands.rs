@@ -1,8 +1,40 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{auth, config, secrets, store};
+use crate::{auth, config, google, secrets, store};
+
+/// Obtém um access_token novo para a conta (via refresh_token).
+async fn access_token_for(email: &str) -> Result<String, String> {
+    let creds = config::client_creds();
+    let rt = secrets::get_refresh_token(email)
+        .map_err(|e| e.to_string())?
+        .ok_or("conta sem refresh token — reconecte")?;
+    let (at, _) = auth::refresh_access_token(&creds, &rt)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(at)
+}
+
+/// Busca os calendários da conta e os salva. Calendários novos: só o principal
+/// já vem marcado para acompanhar (`selected`); a escolha do usuário é preservada.
+async fn sync_calendars_for(email: &str) -> Result<(), String> {
+    let at = access_token_for(email).await?;
+    let cals = google::list_calendars(&at).await.map_err(|e| e.to_string())?;
+    for c in cals {
+        store::upsert_calendar(email, &c.id, &c.summary, c.primary, c.primary)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Janela deslizante: de agora até +30 dias, em RFC3339.
+fn window_30d() -> (String, String) {
+    let now = chrono::Utc::now();
+    let max = now + chrono::Duration::days(30);
+    (now.to_rfc3339(), max.to_rfc3339())
+}
 
 #[derive(Serialize, Clone)]
 pub struct AccountInfo {
@@ -56,6 +88,7 @@ pub async fn start_auth(app: AppHandle, auth_state: State<'_, AuthState>) -> Res
                     let _ = app2.emit("auth-error", e);
                     return;
                 }
+                let _ = sync_calendars_for(&c.email).await; // busca calendários
                 let _ = app2.emit(
                     "account-connected",
                     AccountInfo {
@@ -108,6 +141,7 @@ pub async fn finish_auth_manual(
         .await
         .map_err(|e| e.to_string())?;
     save_connected(&c)?;
+    let _ = sync_calendars_for(&c.email).await;
 
     Ok(AccountInfo {
         email: c.email,
@@ -165,4 +199,74 @@ pub async fn test_account(email: String) -> Result<String, String> {
         .map(|a| a.len())
         .unwrap_or(0);
     Ok(format!("{n} calendário(s) acessível(is)"))
+}
+
+// ---------- Fase 2: calendários e eventos ----------
+
+/// Rebusca os calendários da conta no Google e devolve a lista atualizada.
+#[tauri::command]
+pub async fn refresh_calendars(email: String) -> Result<Vec<store::Calendar>, String> {
+    sync_calendars_for(&email).await?;
+    store::list_calendars(&email).map_err(|e| e.to_string())
+}
+
+/// Lista os calendários de uma conta (do cache local).
+#[tauri::command]
+pub fn account_calendars(email: String) -> Result<Vec<store::Calendar>, String> {
+    store::list_calendars(&email).map_err(|e| e.to_string())
+}
+
+/// Marca/desmarca um calendário para acompanhar.
+#[tauri::command]
+pub fn set_calendar_selected(
+    email: String,
+    calendar_id: String,
+    selected: bool,
+) -> Result<(), String> {
+    store::set_calendar_selected(&email, &calendar_id, selected).map_err(|e| e.to_string())
+}
+
+/// Sincroniza os eventos (janela de 30 dias) de todos os calendários marcados.
+/// Retorna o total de eventos sincronizados.
+#[tauri::command]
+pub async fn sync_now() -> Result<u32, String> {
+    let cals = store::selected_calendars().map_err(|e| e.to_string())?;
+    let mut by_acct: HashMap<String, Vec<store::Calendar>> = HashMap::new();
+    for c in cals {
+        by_acct.entry(c.account_email.clone()).or_default().push(c);
+    }
+
+    let (tmin, tmax) = window_30d();
+    let mut total = 0u32;
+    for (email, cals) in by_acct {
+        let at = access_token_for(&email).await?;
+        for c in cals {
+            let evs = google::fetch_events(&at, &c.id, &tmin, &tmax)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mapped: Vec<store::Event> = evs
+                .into_iter()
+                .map(|e| store::Event {
+                    id: e.id,
+                    calendar_id: c.id.clone(),
+                    account_email: email.clone(),
+                    title: e.title,
+                    start_ts: e.start_ts,
+                    end_ts: e.end_ts,
+                    all_day: e.all_day,
+                    status: e.status,
+                    html_link: e.html_link,
+                })
+                .collect();
+            total += mapped.len() as u32;
+            store::replace_events(&email, &c.id, &mapped).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(total)
+}
+
+/// Próximos eventos (para exibir na UI).
+#[tauri::command]
+pub fn list_events() -> Result<Vec<store::Event>, String> {
+    store::upcoming_events(100).map_err(|e| e.to_string())
 }

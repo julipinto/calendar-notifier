@@ -125,10 +125,16 @@ calendar-notifier/
 - **WSL:** loopback `127.0.0.1` às vezes funciona (localhost forwarding), às
   vezes dá `ERR_CONNECTION_REFUSED` → usar o fallback de colar a URL.
 
-**Fase 2 — Sync**
-- Listar calendários da conta, marcar quais acompanhar.
-- Fetch inicial + incremental com sync tokens; persistir em SQLite.
-- Botão "sincronizar agora".
+**Fase 2 — Sync** ✅
+- `google.rs`: cliente da Calendar API (calendarList + events, `singleEvents`).
+- Tabelas `calendars` e `events` no SQLite; ao conectar, só o calendário
+  principal vem marcado (`selected`); escolha do usuário preservada.
+- Sync = fetch da janela deslizante (agora → +30d) e substituição dos eventos
+  do calendário (transação). Simples e correto p/ janela móvel.
+  > Nota: optamos por refetch da janela em vez de sync tokens — tokens não
+  > combinam bem com janela deslizante. Otimização futura se necessário.
+- UI: expandir calendários + checkbox, "recarregar calendários",
+  "sincronizar agora", lista de próximos eventos (dia-inteiro renderizado em UTC).
 
 **Fase 3 — Notificações + Scheduler**
 - Antecedência global nas configs. Loop de tick + dedup.

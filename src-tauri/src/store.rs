@@ -27,7 +27,28 @@ pub fn init() -> Result<()> {
             email        TEXT PRIMARY KEY,
             display_name TEXT,
             created_at   INTEGER NOT NULL
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS calendars (
+            id            TEXT NOT NULL,
+            account_email TEXT NOT NULL,
+            summary       TEXT,
+            selected      INTEGER NOT NULL DEFAULT 0,
+            is_primary    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (account_email, id)
+        );
+        CREATE TABLE IF NOT EXISTS events (
+            id            TEXT NOT NULL,
+            calendar_id   TEXT NOT NULL,
+            account_email TEXT NOT NULL,
+            title         TEXT,
+            start_ts      INTEGER NOT NULL,
+            end_ts        INTEGER NOT NULL,
+            all_day       INTEGER NOT NULL DEFAULT 0,
+            status        TEXT,
+            html_link     TEXT,
+            PRIMARY KEY (account_email, calendar_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_ts);",
     )?;
     Ok(())
 }
@@ -69,9 +90,162 @@ pub fn list_accounts() -> Result<Vec<Account>> {
 
 pub fn delete_account(email: &str) -> Result<()> {
     let c = conn()?;
+    c.execute("DELETE FROM events WHERE account_email = ?1", [email])?;
+    c.execute("DELETE FROM calendars WHERE account_email = ?1", [email])?;
+    c.execute("DELETE FROM accounts WHERE email = ?1", [email])?;
+    Ok(())
+}
+
+// ---------- calendários ----------
+
+#[derive(Serialize, Clone)]
+pub struct Calendar {
+    pub id: String,
+    pub account_email: String,
+    pub summary: String,
+    pub selected: bool,
+    pub is_primary: bool,
+}
+
+/// Insere/atualiza um calendário preservando a escolha do usuário (`selected`).
+/// Em calendários novos, `default_selected` define o estado inicial.
+pub fn upsert_calendar(
+    account_email: &str,
+    id: &str,
+    summary: &str,
+    is_primary: bool,
+    default_selected: bool,
+) -> Result<()> {
+    let c = conn()?;
     c.execute(
-        "DELETE FROM accounts WHERE email = ?1",
-        rusqlite::params![email],
+        "INSERT INTO calendars (id, account_email, summary, selected, is_primary)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(account_email, id) DO UPDATE SET
+            summary = excluded.summary,
+            is_primary = excluded.is_primary",
+        rusqlite::params![id, account_email, summary, default_selected as i64, is_primary as i64],
     )?;
     Ok(())
+}
+
+pub fn set_calendar_selected(account_email: &str, id: &str, selected: bool) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "UPDATE calendars SET selected = ?1 WHERE account_email = ?2 AND id = ?3",
+        rusqlite::params![selected as i64, account_email, id],
+    )?;
+    Ok(())
+}
+
+pub fn list_calendars(account_email: &str) -> Result<Vec<Calendar>> {
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT id, account_email, summary, selected, is_primary
+         FROM calendars WHERE account_email = ?1
+         ORDER BY is_primary DESC, summary",
+    )?;
+    let rows = stmt
+        .query_map([account_email], row_to_calendar)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Todos os calendários marcados para acompanhar (de todas as contas).
+pub fn selected_calendars() -> Result<Vec<Calendar>> {
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT id, account_email, summary, selected, is_primary
+         FROM calendars WHERE selected = 1",
+    )?;
+    let rows = stmt
+        .query_map([], row_to_calendar)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn row_to_calendar(r: &rusqlite::Row) -> rusqlite::Result<Calendar> {
+    Ok(Calendar {
+        id: r.get(0)?,
+        account_email: r.get(1)?,
+        summary: r.get(2)?,
+        selected: r.get::<_, i64>(3)? != 0,
+        is_primary: r.get::<_, i64>(4)? != 0,
+    })
+}
+
+// ---------- eventos ----------
+
+#[derive(Serialize, Clone)]
+pub struct Event {
+    pub id: String,
+    pub calendar_id: String,
+    pub account_email: String,
+    pub title: String,
+    pub start_ts: i64,
+    pub end_ts: i64,
+    pub all_day: bool,
+    pub status: String,
+    pub html_link: String,
+}
+
+/// Substitui todos os eventos de um calendário pelos recém-buscados (numa
+/// transação). Simples e correto para a janela deslizante de 30 dias.
+pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) -> Result<()> {
+    let mut c = conn()?;
+    let tx = c.transaction()?;
+    tx.execute(
+        "DELETE FROM events WHERE account_email = ?1 AND calendar_id = ?2",
+        rusqlite::params![account_email, calendar_id],
+    )?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO events
+             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?;
+        for e in events {
+            stmt.execute(rusqlite::params![
+                e.id,
+                calendar_id,
+                account_email,
+                e.title,
+                e.start_ts,
+                e.end_ts,
+                e.all_day as i64,
+                e.status,
+                e.html_link,
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Próximos eventos (a partir de agora), ordenados por início. `limit` opcional.
+pub fn upcoming_events(limit: i64) -> Result<Vec<Event>> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link
+         FROM events WHERE start_ts >= ?1 ORDER BY start_ts LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![now, limit], |r| {
+            Ok(Event {
+                id: r.get(0)?,
+                calendar_id: r.get(1)?,
+                account_email: r.get(2)?,
+                title: r.get(3)?,
+                start_ts: r.get(4)?,
+                end_ts: r.get(5)?,
+                all_day: r.get::<_, i64>(6)? != 0,
+                status: r.get(7)?,
+                html_link: r.get(8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
