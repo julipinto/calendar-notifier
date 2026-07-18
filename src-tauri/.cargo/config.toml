@@ -1,0 +1,7 @@
+# Env aplicada aos processos rodados via cargo (inclui `tauri dev` → `cargo run`).
+# WEBKIT_DISABLE_DMABUF_RENDERER: WebKitGTK sob WSLg/algumas GPUs não consegue
+# usar o renderizador DMABUF e abre a janela em branco (ou não abre). Desligar
+# força um caminho compatível. É var só do WebKitGTK → ignorada no Windows/macOS,
+# então é seguro deixar commitada. Só relevante no dev Linux/WSL.
+[env]
+WEBKIT_DISABLE_DMABUF_RENDERER = "1"
