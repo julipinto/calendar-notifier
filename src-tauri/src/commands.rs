@@ -6,6 +6,30 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{auth, config, google, scheduler, secrets, store};
 
+/// Traduz erros técnicos em mensagens amigáveis (sem internet, timeout, etc.).
+pub(crate) fn friendly_err(e: &anyhow::Error) -> String {
+    // procura um erro de reqwest na cadeia de causas
+    for cause in e.chain() {
+        if let Some(re) = cause.downcast_ref::<reqwest::Error>() {
+            if re.is_connect() || re.is_timeout() {
+                return "Sem conexão com a internet (não consegui falar com o Google). \
+                        Vou tentar de novo na próxima sincronização."
+                    .to_string();
+            }
+            if re.is_status() {
+                if let Some(s) = re.status() {
+                    if s.as_u16() == 401 || s.as_u16() == 403 {
+                        return "Autorização recusada pelo Google (token expirado ou \
+                                permissão revogada). Reconecte a conta."
+                            .to_string();
+                    }
+                }
+            }
+        }
+    }
+    e.to_string()
+}
+
 /// Obtém um access_token novo para a conta (via refresh_token).
 async fn access_token_for(email: &str) -> Result<String, String> {
     let creds = config::client_creds();
@@ -14,7 +38,7 @@ async fn access_token_for(email: &str) -> Result<String, String> {
         .ok_or("conta sem refresh token — reconecte")?;
     let (at, _) = auth::refresh_access_token(&creds, &rt)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| friendly_err(&e))?;
     Ok(at)
 }
 
@@ -22,7 +46,9 @@ async fn access_token_for(email: &str) -> Result<String, String> {
 /// já vem marcado para acompanhar (`selected`); a escolha do usuário é preservada.
 async fn sync_calendars_for(email: &str) -> Result<(), String> {
     let at = access_token_for(email).await?;
-    let cals = google::list_calendars(&at).await.map_err(|e| e.to_string())?;
+    let cals = google::list_calendars(&at)
+        .await
+        .map_err(|e| friendly_err(&e))?;
     for c in cals {
         store::upsert_calendar(email, &c.id, &c.summary, c.primary, c.primary)
             .map_err(|e| e.to_string())?;
@@ -260,10 +286,9 @@ pub fn test_notification(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Sincroniza os eventos (janela de 30 dias) de todos os calendários marcados.
-/// Retorna o total de eventos sincronizados.
-#[tauri::command]
-pub async fn sync_now() -> Result<u32, String> {
+/// Núcleo da sincronização (janela de 30d) de todos os calendários marcados.
+/// Reusado pelo comando `sync_now` e pelo poller automático.
+pub(crate) async fn do_sync() -> Result<u32, String> {
     let cals = store::selected_calendars().map_err(|e| e.to_string())?;
     let mut by_acct: HashMap<String, Vec<store::Calendar>> = HashMap::new();
     for c in cals {
@@ -277,7 +302,7 @@ pub async fn sync_now() -> Result<u32, String> {
         for c in cals {
             let evs = google::fetch_events(&at, &c.id, &tmin, &tmax)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| friendly_err(&e))?;
             let mapped: Vec<store::Event> = evs
                 .into_iter()
                 .map(|e| store::Event {
@@ -297,6 +322,27 @@ pub async fn sync_now() -> Result<u32, String> {
         }
     }
     Ok(total)
+}
+
+/// Sincroniza os eventos de todos os calendários marcados (acionado pela UI).
+#[tauri::command]
+pub async fn sync_now() -> Result<u32, String> {
+    do_sync().await
+}
+
+/// Intervalo do polling automático (minutos).
+#[tauri::command]
+pub fn get_poll_minutes() -> Result<i64, String> {
+    store::get_setting("poll_minutes", scheduler::DEFAULT_POLL)
+        .map_err(|e| e.to_string())?
+        .parse()
+        .map_err(|_| "intervalo inválido".to_string())
+}
+
+#[tauri::command]
+pub fn set_poll_minutes(minutes: i64) -> Result<(), String> {
+    let m = minutes.clamp(1, 1440);
+    store::set_setting("poll_minutes", &m.to_string()).map_err(|e| e.to_string())
 }
 
 /// Próximos eventos (para exibir na UI).

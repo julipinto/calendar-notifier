@@ -1,13 +1,14 @@
 //! Loop leve que verifica periodicamente os eventos entrando na janela de aviso
 //! e dispara notificações do sistema (uma vez por evento).
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::store;
 
 const TICK: Duration = Duration::from_secs(30);
 pub const DEFAULT_LEAD: &str = "10";
+pub const DEFAULT_POLL: &str = "60";
 
 /// Inicia o loop de notificações em background.
 pub fn start(app: AppHandle) {
@@ -18,6 +19,28 @@ pub fn start(app: AppHandle) {
             if let Err(e) = tick(&app) {
                 eprintln!("[scheduler] erro no tick: {e}");
             }
+        }
+    });
+}
+
+/// Inicia o polling periódico: sincroniza logo ao subir e depois a cada
+/// `poll_minutes` (padrão 5). Emite `events-updated` e atualiza o tray.
+pub fn start_poller(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match crate::commands::do_sync().await {
+                Ok(n) => {
+                    let _ = app.emit("events-updated", n);
+                    crate::tray::update_tray(&app);
+                }
+                Err(e) => eprintln!("[poller] sync falhou: {e}"),
+            }
+            let mins: u64 = store::get_setting("poll_minutes", DEFAULT_POLL)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5)
+                .max(1);
+            tokio::time::sleep(Duration::from_secs(mins * 60)).await;
         }
     });
 }

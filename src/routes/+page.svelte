@@ -31,6 +31,7 @@
   let authUrl = $state("");
   let manualUrl = $state("");
   let leadMinutes = $state(10);
+  let pollMinutes = $state(5);
 
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
@@ -52,6 +53,16 @@
   async function saveLead() {
     await invoke("set_lead_minutes", { minutes: Number(leadMinutes) });
     status = `Antecedência salva: ${leadMinutes} min antes.`;
+  }
+
+  async function loadPoll() {
+    const v = await invoke<number>("get_poll_minutes");
+    pollMinutes = [30, 60, 240, 360, 720, 1440].includes(v) ? v : 60;
+  }
+
+  async function savePoll() {
+    await invoke("set_poll_minutes", { minutes: Number(pollMinutes) });
+    status = `Sincronização automática: a cada ${pollMinutes} min.`;
   }
 
   async function testNotif() {
@@ -162,14 +173,18 @@
     loadAccounts();
     loadEvents();
     loadLead();
+    loadPoll();
     const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
     const un2 = listen<string>("auth-error", (e) => {
       status = `Erro: ${e.payload}`;
       busy = false;
     });
+    // poller sincronizou em background → atualiza a lista
+    const un3 = listen<number>("events-updated", () => loadEvents());
     return () => {
       un1.then((f) => f());
       un2.then((f) => f());
+      un3.then((f) => f());
     };
   });
 </script>
@@ -214,6 +229,19 @@
         minutos antes
       </label>
       <button class="ghost" onclick={testNotif}>Testar notificação</button>
+    </div>
+    <div class="lead-row">
+      <label>
+        Sincronizar automaticamente
+        <select bind:value={pollMinutes} onchange={savePoll}>
+          <option value={30}>a cada 30 minutos</option>
+          <option value={60}>a cada 1 hora</option>
+          <option value={240}>a cada 4 horas</option>
+          <option value={360}>a cada 6 horas</option>
+          <option value={720}>a cada 12 horas</option>
+          <option value={1440}>a cada 24 horas</option>
+        </select>
+      </label>
     </div>
   </section>
 
@@ -483,6 +511,13 @@
     border: 1px solid #bbb;
     font-size: 0.95em;
     text-align: center;
+  }
+  .lead-row select {
+    padding: 0.3em 0.4em;
+    border-radius: 6px;
+    border: 1px solid #bbb;
+    font-size: 0.95em;
+    font-family: inherit;
   }
   @media (prefers-color-scheme: dark) {
     :root {

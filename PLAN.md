@@ -149,10 +149,19 @@ calendar-notifier/
 - **Dev WSL:** sem daemon de notificação nativo; instalamos `dunst` num D-Bus de
   sessão dedicado. No Windows nativo o toast é nativo.
 
-**Fase 4 — Multi-conta + Tray**
-- Conectar N contas; agregação de eventos.
-- Tray mostra próximo evento; menu (sync now, config, sair).
-- Polling periódico automático.
+**Fase 4 — Multi-conta + Tray + polling** ✅
+- Polling automático (`scheduler::start_poller`): sincroniza ao subir e a cada
+  intervalo escolhido (30min/1h/4h/6h/12h/24h; padrão 1h). Emite `events-updated`.
+- `tray.rs`: ícone na bandeja, tooltip com próximo evento, menu (sincronizar /
+  abrir / sair). Não-fatal se o WSLg não tiver host de bandeja.
+- Fechar a janela esconde na bandeja (`prevent_close`) — roda em background.
+- Tratamento de erro (`friendly_err`): sem internet/timeout e 401/403 viram
+  mensagens amigáveis; poller offline apenas loga e tenta no próximo ciclo.
+- **Removido o `tauri-plugin-single-instance`**: no nosso dev (D-Bus de sessão
+  dedicado + muitos kill/relaunch) ele deixava locks obsoletos e a instância
+  nova saía (exit 0). Dep mantida no Cargo p/ re-adição fácil no build Windows.
+  > TODO Fase 5: re-adicionar single-instance p/ Windows (evita 2 tray icons),
+  > com guarda contra lock obsoleto.
 
 **Fase 5 — Polimento**
 - Reconexão/refresh robusto, tratamento de 410, start-on-login, ícones,
