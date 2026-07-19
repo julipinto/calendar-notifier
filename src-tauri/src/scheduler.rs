@@ -57,6 +57,10 @@ fn tick(app: &AppHandle) -> anyhow::Result<()> {
         .parse()
         .unwrap_or(10);
 
+    let sound_on = store::get_setting("sound_enabled", "true")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+
     for ev in store::due_notifications(lead)? {
         let mins = ((ev.start_ts - now()) as f64 / 60.0).ceil().max(0.0) as i64;
         let body = if mins <= 1 {
@@ -64,12 +68,11 @@ fn tick(app: &AppHandle) -> anyhow::Result<()> {
         } else {
             format!("Começa em {mins} min")
         };
-        let _ = app
-            .notification()
-            .builder()
-            .title(&ev.title)
-            .body(&body)
-            .show();
+        let mut b = app.notification().builder().title(&ev.title).body(&body);
+        if sound_on {
+            b = b.sound("Default");
+        }
+        let _ = b.show();
         store::mark_notified(&ev.account_email, &ev.calendar_id, &ev.id)?;
     }
     Ok(())

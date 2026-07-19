@@ -278,11 +278,29 @@ pub fn set_lead_minutes(minutes: i64) -> Result<(), String> {
 /// Dispara uma notificação de teste (para validar o canal do SO).
 #[tauri::command]
 pub fn test_notification(app: AppHandle) -> Result<(), String> {
-    app.notification()
+    let sound_on = store::get_setting("sound_enabled", "true")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    let mut b = app
+        .notification()
         .builder()
         .title("Calendar Notifier")
-        .body("Notificação de teste ✓")
-        .show()
+        .body("Notificação de teste ✓");
+    if sound_on {
+        b = b.sound("Default");
+    }
+    b.show().map_err(|e| e.to_string())
+}
+
+/// Liga/desliga o som das notificações.
+#[tauri::command]
+pub fn get_sound_enabled() -> Result<bool, String> {
+    Ok(store::get_setting("sound_enabled", "true").map_err(|e| e.to_string())? != "false")
+}
+
+#[tauri::command]
+pub fn set_sound_enabled(enabled: bool) -> Result<(), String> {
+    store::set_setting("sound_enabled", if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())
 }
 

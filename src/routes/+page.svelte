@@ -32,6 +32,7 @@
   let manualUrl = $state("");
   let leadMinutes = $state(10);
   let pollMinutes = $state(5);
+  let soundEnabled = $state(true);
 
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
@@ -63,6 +64,15 @@
   async function savePoll() {
     await invoke("set_poll_minutes", { minutes: Number(pollMinutes) });
     status = `Sincronização automática: a cada ${pollMinutes} min.`;
+  }
+
+  async function loadSound() {
+    soundEnabled = await invoke<boolean>("get_sound_enabled");
+  }
+
+  async function saveSound() {
+    await invoke("set_sound_enabled", { enabled: soundEnabled });
+    status = soundEnabled ? "Som das notificações: ligado." : "Som das notificações: desligado.";
   }
 
   async function testNotif() {
@@ -174,6 +184,7 @@
     loadEvents();
     loadLead();
     loadPoll();
+    loadSound();
     const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
     const un2 = listen<string>("auth-error", (e) => {
       status = `Erro: ${e.payload}`;
@@ -229,6 +240,12 @@
         minutos antes
       </label>
       <button class="ghost" onclick={testNotif}>Testar notificação</button>
+    </div>
+    <div class="lead-row">
+      <label class="check">
+        <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
+        Tocar som na notificação
+      </label>
     </div>
     <div class="lead-row">
       <label>
@@ -518,6 +535,11 @@
     border: 1px solid #bbb;
     font-size: 0.95em;
     font-family: inherit;
+  }
+  .lead-row label.check {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
   }
   @media (prefers-color-scheme: dark) {
     :root {
