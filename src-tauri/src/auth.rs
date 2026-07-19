@@ -152,7 +152,10 @@ pub async fn exchange(
 }
 
 /// Troca um refresh_token por um novo access_token. Retorna (access_token, expires_in).
-pub async fn refresh_access_token(creds: &ClientCreds, refresh_token: &str) -> Result<(String, i64)> {
+pub async fn refresh_access_token(
+    creds: &ClientCreds,
+    refresh_token: &str,
+) -> Result<(String, i64)> {
     let client = reqwest::Client::new();
     let res: TokenResponse = client
         .post(&creds.token_uri)

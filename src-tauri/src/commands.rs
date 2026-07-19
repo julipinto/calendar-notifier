@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{auth, config, google, scheduler, secrets, store};
@@ -91,7 +92,10 @@ fn save_connected(c: &auth::Connected) -> Result<(), String> {
 /// Em paralelo, escuta o loopback (caminho automático — funciona no Windows);
 /// no sucesso emite `account-connected`, no erro `auth-error`.
 #[tauri::command]
-pub async fn start_auth(app: AppHandle, auth_state: State<'_, AuthState>) -> Result<String, String> {
+pub async fn start_auth(
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+) -> Result<String, String> {
     let creds = config::client_creds();
     let pending = auth::begin(&creds).await.map_err(|e| e.to_string())?;
     let url = pending.auth_url.clone();
@@ -158,7 +162,8 @@ pub async fn finish_auth_manual(
             _ => {}
         }
     }
-    let code = code.ok_or("a URL não tem 'code' — copie a URL de redirect (127.0.0.1/?code=...)")?;
+    let code =
+        code.ok_or("a URL não tem 'code' — copie a URL de redirect (127.0.0.1/?code=...)")?;
     if st.as_deref() != Some(ctx.state.as_str()) {
         return Err("state não confere — reinicie a conexão".into());
     }
@@ -302,6 +307,22 @@ pub fn get_sound_enabled() -> Result<bool, String> {
 pub fn set_sound_enabled(enabled: bool) -> Result<(), String> {
     store::set_setting("sound_enabled", if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())
+}
+
+/// Iniciar o app junto com o sistema operacional (autostart no login).
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let m = app.autolaunch();
+    if enabled {
+        m.enable().map_err(|e| e.to_string())
+    } else {
+        m.disable().map_err(|e| e.to_string())
+    }
 }
 
 /// Núcleo da sincronização (janela de 30d) de todos os calendários marcados.

@@ -39,6 +39,7 @@
   let leadMinutes = $state(10);
   let pollMinutes = $state(60);
   let soundEnabled = $state(true);
+  let autostart = $state(false);
   let view = $state<"events" | "settings">("events");
 
   const ACCENT = "#6366f1";
@@ -79,6 +80,22 @@
   }
   async function saveSound() {
     await invoke("set_sound_enabled", { enabled: soundEnabled });
+  }
+  async function loadAutostart() {
+    try {
+      autostart = await invoke<boolean>("get_autostart");
+    } catch {
+      autostart = false;
+    }
+  }
+  async function saveAutostart() {
+    try {
+      await invoke("set_autostart", { enabled: autostart });
+      status = autostart ? "Vai iniciar com o sistema." : "Não inicia mais com o sistema.";
+    } catch (e) {
+      status = `Erro: ${e}`;
+      autostart = !autostart;
+    }
   }
 
   async function connect() {
@@ -218,6 +235,7 @@
     loadLead();
     loadPoll();
     loadSound();
+    loadAutostart();
     loadLastSync();
     const uns = [
       listen<Account>("account-connected", (e) => onConnected(e.payload)),
@@ -376,6 +394,10 @@
           <label class="set-row check">
             <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
             <span>Tocar som na notificação</span>
+          </label>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={autostart} onchange={saveAutostart} />
+            <span>Iniciar com o sistema</span>
           </label>
           <div class="set-row">
             <span>Sincronizar automaticamente</span>

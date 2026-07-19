@@ -73,11 +73,9 @@ pub fn init() -> Result<()> {
 pub fn get_setting(key: &str, default: &str) -> Result<String> {
     let c = conn()?;
     let v: Option<String> = c
-        .query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            [key],
-            |r| r.get(0),
-        )
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
         .ok();
     Ok(v.unwrap_or_else(|| default.to_string()))
 }
