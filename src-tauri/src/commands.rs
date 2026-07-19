@@ -50,7 +50,7 @@ async fn sync_calendars_for(email: &str) -> Result<(), String> {
         .await
         .map_err(|e| friendly_err(&e))?;
     for c in cals {
-        store::upsert_calendar(email, &c.id, &c.summary, c.primary, c.primary)
+        store::upsert_calendar(email, &c.id, &c.summary, c.primary, c.primary, &c.color)
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -339,7 +339,21 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
             store::replace_events(&email, &c.id, &mapped).map_err(|e| e.to_string())?;
         }
     }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = store::set_setting("last_sync_ts", &now.to_string());
     Ok(total)
+}
+
+/// Timestamp (epoch segundos) da última sincronização bem-sucedida; 0 se nunca.
+#[tauri::command]
+pub fn get_last_sync() -> Result<i64, String> {
+    store::get_setting("last_sync_ts", "0")
+        .map_err(|e| e.to_string())?
+        .parse()
+        .map_err(|_| "valor inválido".to_string())
 }
 
 /// Sincroniza os eventos de todos os calendários marcados (acionado pela UI).
@@ -365,6 +379,6 @@ pub fn set_poll_minutes(minutes: i64) -> Result<(), String> {
 
 /// Próximos eventos (para exibir na UI).
 #[tauri::command]
-pub fn list_events() -> Result<Vec<store::Event>, String> {
+pub fn list_events() -> Result<Vec<store::UpcomingEvent>, String> {
     store::upcoming_events(100).map_err(|e| e.to_string())
 }

@@ -9,6 +9,7 @@ pub struct CalendarItem {
     pub id: String,
     pub summary: String,
     pub primary: bool,
+    pub color: String,
 }
 
 /// Lista os calendários visíveis pela conta (calendarList).
@@ -30,6 +31,7 @@ pub async fn list_calendars(access_token: &str) -> Result<Vec<CalendarItem>> {
                 id: it.id,
                 summary: it.summary.unwrap_or_default(),
                 primary: it.primary.unwrap_or(false),
+                color: it.background_color.unwrap_or_default(),
             });
         }
         match v.next_page_token {
@@ -148,6 +150,8 @@ struct CalendarListEntry {
     id: String,
     summary: Option<String>,
     primary: Option<bool>,
+    #[serde(rename = "backgroundColor")]
+    background_color: Option<String>,
 }
 
 #[derive(Deserialize)]

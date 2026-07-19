@@ -33,7 +33,10 @@ pub fn start_poller(app: AppHandle) {
                     let _ = app.emit("events-updated", n);
                     crate::tray::update_tray(&app);
                 }
-                Err(e) => eprintln!("[poller] sync falhou: {e}"),
+                Err(e) => {
+                    eprintln!("[poller] sync falhou: {e}");
+                    let _ = app.emit("sync-error", e);
+                }
             }
             let mins: u64 = store::get_setting("poll_minutes", DEFAULT_POLL)
                 .ok()

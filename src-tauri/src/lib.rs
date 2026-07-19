@@ -48,6 +48,7 @@ pub fn run() {
             commands::set_poll_minutes,
             commands::get_sound_enabled,
             commands::set_sound_enabled,
+            commands::get_last_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

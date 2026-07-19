@@ -34,6 +34,7 @@ pub fn init() -> Result<()> {
             summary       TEXT,
             selected      INTEGER NOT NULL DEFAULT 0,
             is_primary    INTEGER NOT NULL DEFAULT 0,
+            color         TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (account_email, id)
         );
         CREATE TABLE IF NOT EXISTS events (
@@ -55,9 +56,13 @@ pub fn init() -> Result<()> {
             value TEXT NOT NULL
         );",
     )?;
-    // migração p/ bancos criados antes da coluna `notified` (ignora se já existe)
+    // migrações p/ bancos antigos (ignora se a coluna já existe)
     let _ = c.execute(
         "ALTER TABLE events ADD COLUMN notified INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = c.execute(
+        "ALTER TABLE calendars ADD COLUMN color TEXT NOT NULL DEFAULT ''",
         [],
     );
     Ok(())
@@ -139,6 +144,7 @@ pub struct Calendar {
     pub summary: String,
     pub selected: bool,
     pub is_primary: bool,
+    pub color: String,
 }
 
 /// Insere/atualiza um calendário preservando a escolha do usuário (`selected`).
@@ -149,15 +155,24 @@ pub fn upsert_calendar(
     summary: &str,
     is_primary: bool,
     default_selected: bool,
+    color: &str,
 ) -> Result<()> {
     let c = conn()?;
     c.execute(
-        "INSERT INTO calendars (id, account_email, summary, selected, is_primary)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO calendars (id, account_email, summary, selected, is_primary, color)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(account_email, id) DO UPDATE SET
             summary = excluded.summary,
-            is_primary = excluded.is_primary",
-        rusqlite::params![id, account_email, summary, default_selected as i64, is_primary as i64],
+            is_primary = excluded.is_primary,
+            color = excluded.color",
+        rusqlite::params![
+            id,
+            account_email,
+            summary,
+            default_selected as i64,
+            is_primary as i64,
+            color
+        ],
     )?;
     Ok(())
 }
@@ -174,7 +189,7 @@ pub fn set_calendar_selected(account_email: &str, id: &str, selected: bool) -> R
 pub fn list_calendars(account_email: &str) -> Result<Vec<Calendar>> {
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT id, account_email, summary, selected, is_primary
+        "SELECT id, account_email, summary, selected, is_primary, color
          FROM calendars WHERE account_email = ?1
          ORDER BY is_primary DESC, summary",
     )?;
@@ -188,7 +203,7 @@ pub fn list_calendars(account_email: &str) -> Result<Vec<Calendar>> {
 pub fn selected_calendars() -> Result<Vec<Calendar>> {
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT id, account_email, summary, selected, is_primary
+        "SELECT id, account_email, summary, selected, is_primary, color
          FROM calendars WHERE selected = 1",
     )?;
     let rows = stmt
@@ -204,6 +219,7 @@ fn row_to_calendar(r: &rusqlite::Row) -> rusqlite::Result<Calendar> {
         summary: r.get(2)?,
         selected: r.get::<_, i64>(3)? != 0,
         is_primary: r.get::<_, i64>(4)? != 0,
+        color: r.get(5)?,
     })
 }
 
@@ -337,29 +353,49 @@ pub fn mark_notified(account_email: &str, calendar_id: &str, id: &str) -> Result
     Ok(())
 }
 
-/// Próximos eventos (a partir de agora), ordenados por início. `limit` opcional.
-pub fn upcoming_events(limit: i64) -> Result<Vec<Event>> {
+/// Evento enriquecido para a UI (com cor e nome do calendário de origem).
+#[derive(Serialize, Clone)]
+pub struct UpcomingEvent {
+    pub id: String,
+    pub account_email: String,
+    pub title: String,
+    pub start_ts: i64,
+    pub end_ts: i64,
+    pub all_day: bool,
+    pub html_link: String,
+    pub color: String,
+    pub calendar_summary: String,
+}
+
+/// Próximos eventos (a partir de agora), ordenados por início, com a cor/nome
+/// do calendário via JOIN. `limit` opcional.
+pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link
-         FROM events WHERE start_ts >= ?1 ORDER BY start_ts LIMIT ?2",
+        "SELECT e.id, e.account_email, e.title, e.start_ts, e.end_ts, e.all_day,
+                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, '')
+         FROM events e
+         LEFT JOIN calendars c
+           ON c.account_email = e.account_email AND c.id = e.calendar_id
+         WHERE e.start_ts >= ?1
+         ORDER BY e.start_ts LIMIT ?2",
     )?;
     let rows = stmt
         .query_map(rusqlite::params![now, limit], |r| {
-            Ok(Event {
+            Ok(UpcomingEvent {
                 id: r.get(0)?,
-                calendar_id: r.get(1)?,
-                account_email: r.get(2)?,
-                title: r.get(3)?,
-                start_ts: r.get(4)?,
-                end_ts: r.get(5)?,
-                all_day: r.get::<_, i64>(6)? != 0,
-                status: r.get(7)?,
-                html_link: r.get(8)?,
+                account_email: r.get(1)?,
+                title: r.get(2)?,
+                start_ts: r.get(3)?,
+                end_ts: r.get(4)?,
+                all_day: r.get::<_, i64>(5)? != 0,
+                html_link: r.get(6)?,
+                color: r.get(7)?,
+                calendar_summary: r.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

@@ -11,14 +11,18 @@
     summary: string;
     selected: boolean;
     is_primary: boolean;
+    color: string;
   };
   type CalEvent = {
     id: string;
     account_email: string;
     title: string;
     start_ts: number;
+    end_ts: number;
     all_day: boolean;
     html_link: string;
+    color: string;
+    calendar_summary: string;
   };
 
   let accounts = $state<Account[]>([]);
@@ -28,67 +32,60 @@
   let busy = $state(false);
   let syncing = $state(false);
   let status = $state("");
+  let offline = $state(false);
+  let lastSync = $state(0);
   let authUrl = $state("");
   let manualUrl = $state("");
   let leadMinutes = $state(10);
-  let pollMinutes = $state(5);
+  let pollMinutes = $state(60);
   let soundEnabled = $state(true);
+  let view = $state<"events" | "settings">("events");
+
+  const ACCENT = "#6366f1";
 
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
     for (const a of accounts) await loadCalendars(a.email);
   }
-
   async function loadCalendars(email: string) {
     calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
   }
-
   async function loadEvents() {
     events = await invoke<CalEvent[]>("list_events");
   }
-
   async function loadLead() {
     leadMinutes = await invoke<number>("get_lead_minutes");
   }
-
-  async function saveLead() {
-    await invoke("set_lead_minutes", { minutes: Number(leadMinutes) });
-    status = `Antecedência salva: ${leadMinutes} min antes.`;
-  }
-
   async function loadPoll() {
     const v = await invoke<number>("get_poll_minutes");
     pollMinutes = [30, 60, 240, 360, 720, 1440].includes(v) ? v : 60;
   }
-
-  async function savePoll() {
-    await invoke("set_poll_minutes", { minutes: Number(pollMinutes) });
-    status = `Sincronização automática: a cada ${pollMinutes} min.`;
-  }
-
   async function loadSound() {
     soundEnabled = await invoke<boolean>("get_sound_enabled");
   }
-
-  async function saveSound() {
-    await invoke("set_sound_enabled", { enabled: soundEnabled });
-    status = soundEnabled ? "Som das notificações: ligado." : "Som das notificações: desligado.";
+  async function loadLastSync() {
+    try {
+      lastSync = await invoke<number>("get_last_sync");
+    } catch {
+      lastSync = 0;
+    }
   }
 
-  async function testNotif() {
-    try {
-      await invoke("test_notification");
-      status = "Notificação de teste enviada (veja no seu SO).";
-    } catch (e) {
-      status = `Erro na notificação: ${e}`;
-    }
+  async function saveLead() {
+    await invoke("set_lead_minutes", { minutes: Number(leadMinutes) });
+  }
+  async function savePoll() {
+    await invoke("set_poll_minutes", { minutes: Number(pollMinutes) });
+  }
+  async function saveSound() {
+    await invoke("set_sound_enabled", { enabled: soundEnabled });
   }
 
   async function connect() {
     busy = true;
     authUrl = "";
     manualUrl = "";
-    status = "Autorize no navegador. No WSL, cole a URL de redirect abaixo.";
+    status = "Autorize no navegador…";
     try {
       authUrl = await invoke<string>("start_auth");
     } catch (e) {
@@ -96,7 +93,6 @@
       busy = false;
     }
   }
-
   async function finishManual() {
     if (!manualUrl.trim()) return;
     status = "Concluindo…";
@@ -107,25 +103,21 @@
       status = `Erro: ${e}`;
     }
   }
-
   async function onConnected(acc: Account) {
-    status = `Conta conectada: ${acc.email}. Sincronizando…`;
+    status = `Conta conectada: ${acc.email}`;
     authUrl = "";
     manualUrl = "";
     busy = false;
     await loadAccounts();
     await syncNow();
   }
-
   async function remove(email: string) {
     await invoke("remove_account", { email });
-    status = `Removida: ${email}`;
     await loadAccounts();
     await loadEvents();
   }
-
   async function reloadCalendars(email: string) {
-    status = `Atualizando calendários de ${email}…`;
+    status = "Atualizando calendários…";
     try {
       calendars[email] = await invoke<Calendar[]>("refresh_calendars", { email });
       status = "Calendários atualizados.";
@@ -133,7 +125,6 @@
       status = `Erro: ${e}`;
     }
   }
-
   async function toggleCalendar(cal: Calendar) {
     await invoke("set_calendar_selected", {
       email: cal.account_email,
@@ -142,42 +133,84 @@
     });
     await loadCalendars(cal.account_email);
   }
-
   async function syncNow() {
     syncing = true;
-    status = "Sincronizando eventos…";
+    status = "";
     try {
       const n = await invoke<number>("sync_now");
-      status = `${n} evento(s) sincronizado(s).`;
+      offline = false;
       await loadEvents();
+      await loadLastSync();
+      status = `${n} evento(s) sincronizado(s).`;
     } catch (e) {
-      status = `Erro na sincronização: ${e}`;
+      offline = String(e).includes("internet");
+      status = `${e}`;
     } finally {
       syncing = false;
     }
   }
+  async function testNotif() {
+    try {
+      await invoke("test_notification");
+      status = "Notificação de teste enviada.";
+    } catch (e) {
+      status = `Erro: ${e}`;
+    }
+  }
 
-  function fmtWhen(e: CalEvent): string {
-    const d = new Date(e.start_ts * 1000);
-    if (e.all_day)
-      // dia inteiro é guardado como meia-noite UTC — renderiza em UTC p/ não
-      // "voltar" um dia no fuso local.
-      return (
-        d.toLocaleDateString("pt-BR", {
-          weekday: "short",
-          day: "2-digit",
-          month: "short",
-          timeZone: "UTC",
-        }) + " · dia inteiro"
-      );
-    return d.toLocaleString("pt-BR", {
-      weekday: "short",
-      day: "2-digit",
-      month: "short",
+  function fmtTime(e: CalEvent): string {
+    if (e.all_day) return "dia inteiro";
+    return new Date(e.start_ts * 1000).toLocaleTimeString("pt-BR", {
       hour: "2-digit",
       minute: "2-digit",
     });
   }
+  function dayInfo(e: CalEvent): { key: string; label: string } {
+    const d = new Date(e.start_ts * 1000);
+    const y = e.all_day ? d.getUTCFullYear() : d.getFullYear();
+    const m = e.all_day ? d.getUTCMonth() : d.getMonth();
+    const day = e.all_day ? d.getUTCDate() : d.getDate();
+    const dateOnly = new Date(y, m, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diff = Math.round((dateOnly.getTime() - today.getTime()) / 86400000);
+    let label: string;
+    if (diff === 0) label = "Hoje";
+    else if (diff === 1) label = "Amanhã";
+    else
+      label = dateOnly.toLocaleDateString("pt-BR", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      });
+    return { key: `${y}-${m}-${day}`, label };
+  }
+  function relTime(ts: number): string {
+    if (!ts) return "nunca sincronizado";
+    const mins = Math.round((Date.now() / 1000 - ts) / 60);
+    if (mins < 1) return "sincronizado agora";
+    if (mins < 60) return `sincronizado há ${mins} min`;
+    const h = Math.round(mins / 60);
+    if (h < 24) return `sincronizado há ${h} h`;
+    return `sincronizado há ${Math.round(h / 24)} d`;
+  }
+  function dotColor(c: string): string {
+    return c && c.startsWith("#") ? c : ACCENT;
+  }
+
+  const groups = $derived.by(() => {
+    const out: { key: string; label: string; items: CalEvent[] }[] = [];
+    let cur: { key: string; label: string; items: CalEvent[] } | null = null;
+    for (const e of events) {
+      const { key, label } = dayInfo(e);
+      if (!cur || cur.key !== key) {
+        cur = { key, label, items: [] };
+        out.push(cur);
+      }
+      cur.items.push(e);
+    }
+    return out;
+  });
 
   onMount(() => {
     loadAccounts();
@@ -185,377 +218,343 @@
     loadLead();
     loadPoll();
     loadSound();
-    const un1 = listen<Account>("account-connected", (e) => onConnected(e.payload));
-    const un2 = listen<string>("auth-error", (e) => {
-      status = `Erro: ${e.payload}`;
-      busy = false;
-    });
-    // poller sincronizou em background → atualiza a lista
-    const un3 = listen<number>("events-updated", () => loadEvents());
-    return () => {
-      un1.then((f) => f());
-      un2.then((f) => f());
-      un3.then((f) => f());
-    };
+    loadLastSync();
+    const uns = [
+      listen<Account>("account-connected", (e) => onConnected(e.payload)),
+      listen<string>("auth-error", (e) => {
+        status = `Erro: ${e.payload}`;
+        busy = false;
+      }),
+      listen<number>("events-updated", () => {
+        offline = false;
+        loadEvents();
+        loadLastSync();
+      }),
+      listen<string>("sync-error", (e) => {
+        offline = String(e.payload).includes("internet");
+      }),
+    ];
+    return () => uns.forEach((u) => u.then((f) => f()));
   });
 </script>
 
-<main class="container">
-  <header>
-    <h1>Calendar Notifier</h1>
-    <button class="sync" onclick={syncNow} disabled={syncing || accounts.length === 0}>
-      {syncing ? "Sincronizando…" : "↻ Sincronizar agora"}
-    </button>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <line x1="16" y1="2" x2="16" y2="6" />
+          <line x1="8" y1="2" x2="8" y2="6" />
+          <line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
+      </div>
+      <div>
+        <h1>Calendar Notifier</h1>
+        <span class="sub">
+          {#if offline}<span class="offline">● offline</span> · {/if}{relTime(lastSync)}
+        </span>
+      </div>
+    </div>
+    <div class="actions">
+      <button
+        class="icon-btn"
+        class:active={view === "settings"}
+        title="Configurações"
+        aria-label="Configurações"
+        onclick={() => (view = view === "settings" ? "events" : "settings")}
+      >⚙</button>
+      <button class="btn primary" onclick={syncNow} disabled={syncing || accounts.length === 0}>
+        {syncing ? "Sincronizando…" : "↻ Sincronizar"}
+      </button>
+    </div>
   </header>
 
-  <button onclick={connect} disabled={busy}>
-    {busy ? "Conectando…" : "+ Conectar conta"}
-  </button>
-
-  {#if authUrl}
-    <div class="auth-flow">
-      <p class="step"><b>1.</b> Abra o link e autorize no navegador:</p>
-      <button class="ghost" onclick={() => openUrl(authUrl)}>Abrir link de autorização</button>
-      <textarea class="url-box" readonly rows="2">{authUrl}</textarea>
-      <p class="step">
-        <b>2.</b> Se o navegador der erro em <code>127.0.0.1</code> (normal no WSL),
-        copie a URL da barra de endereço e cole aqui:
-      </p>
-      <textarea
-        class="url-box"
-        bind:value={manualUrl}
-        rows="2"
-        placeholder="http://127.0.0.1:PORTA/?state=...&code=..."
-      ></textarea>
-      <button onclick={finishManual} disabled={!manualUrl.trim()}>Concluir conexão</button>
-    </div>
-  {/if}
-
-  <section class="settings">
-    <h2>Notificações</h2>
-    <div class="lead-row">
-      <label>
-        Avisar
-        <input type="number" min="0" max="1440" bind:value={leadMinutes} onchange={saveLead} />
-        minutos antes
-      </label>
-      <button class="ghost" onclick={testNotif}>Testar notificação</button>
-    </div>
-    <div class="lead-row">
-      <label class="check">
-        <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
-        Tocar som na notificação
-      </label>
-    </div>
-    <div class="lead-row">
-      <label>
-        Sincronizar automaticamente
-        <select bind:value={pollMinutes} onchange={savePoll}>
-          <option value={30}>a cada 30 minutos</option>
-          <option value={60}>a cada 1 hora</option>
-          <option value={240}>a cada 4 horas</option>
-          <option value={360}>a cada 6 horas</option>
-          <option value={720}>a cada 12 horas</option>
-          <option value={1440}>a cada 24 horas</option>
-        </select>
-      </label>
-    </div>
-  </section>
-
-  {#if accounts.length > 0}
-    <section>
-      <h2>Contas</h2>
-      <ul class="accounts">
-        {#each accounts as acc (acc.email)}
-          <li>
-            <div class="acc-row">
-              <div class="acc-info">
-                <span class="name">{acc.display_name}</span>
-                <span class="email">{acc.email}</span>
-              </div>
-              <div class="acc-actions">
-                <button class="ghost" onclick={() => (expanded[acc.email] = !expanded[acc.email])}>
-                  {expanded[acc.email] ? "▾" : "▸"} Calendários
-                </button>
-                <button class="danger" onclick={() => remove(acc.email)}>Remover</button>
-              </div>
-            </div>
-
-            {#if expanded[acc.email]}
-              <div class="cals">
-                {#each calendars[acc.email] ?? [] as cal (cal.id)}
-                  <label class="cal">
-                    <input
-                      type="checkbox"
-                      checked={cal.selected}
-                      onchange={() => toggleCalendar(cal)}
-                    />
-                    <span>{cal.summary || cal.id}</span>
-                    {#if cal.is_primary}<span class="badge">principal</span>{/if}
-                  </label>
-                {/each}
-                <button class="ghost tiny" onclick={() => reloadCalendars(acc.email)}>
-                  Recarregar calendários
-                </button>
-              </div>
-            {/if}
-          </li>
+  <div class="content">
+    {#if view === "events"}
+      {#if events.length === 0}
+        <div class="empty">
+          <div class="empty-emoji">🗓️</div>
+          <p>Nenhum evento nos próximos 30 dias.</p>
+          {#if accounts.length === 0}
+            <button class="btn primary" onclick={() => (view = "settings")}>Conectar uma conta</button>
+          {/if}
+        </div>
+      {:else}
+        {#each groups as g (g.key)}
+          <div class="day-group">
+            <h2 class="day-label">{g.label}</h2>
+            {#each g.items as ev (ev.account_email + ev.id)}
+              <button
+                class="event"
+                onclick={() => ev.html_link && openUrl(ev.html_link)}
+                title={ev.calendar_summary}
+              >
+                <span class="time">{fmtTime(ev)}</span>
+                <span class="dot" style="background:{dotColor(ev.color)}"></span>
+                <span class="ev-title">{ev.title}</span>
+              </button>
+            {/each}
+          </div>
         {/each}
-      </ul>
-    </section>
-  {/if}
-
-  <section>
-    <h2>Próximos eventos</h2>
-    {#if events.length === 0}
-      <p class="empty">Nenhum evento em cache. Conecte uma conta e sincronize.</p>
+      {/if}
     {:else}
-      <ul class="events">
-        {#each events as ev (ev.account_email + ev.id)}
-          <li>
-            <span class="when">{fmtWhen(ev)}</span>
-            <span class="title">
-              {#if ev.html_link}
-                <a href={ev.html_link} onclick={(e) => { e.preventDefault(); openUrl(ev.html_link); }}>{ev.title}</a>
-              {:else}{ev.title}{/if}
-            </span>
-          </li>
-        {/each}
-      </ul>
+      <!-- Configurações -->
+      <section class="card">
+        <div class="card-head">
+          <h3>Contas</h3>
+          <button class="btn ghost sm" onclick={connect} disabled={busy}>
+            {busy ? "Conectando…" : "+ Conectar"}
+          </button>
+        </div>
+
+        {#if authUrl}
+          <div class="auth-flow">
+            <p class="step"><b>1.</b> Autorize no navegador:</p>
+            <button class="btn ghost sm" onclick={() => openUrl(authUrl)}>Abrir link</button>
+            <p class="step">
+              <b>2.</b> Se der erro em <code>127.0.0.1</code> (normal no WSL), cole a URL da barra
+              de endereço:
+            </p>
+            <textarea
+              class="url-box"
+              bind:value={manualUrl}
+              rows="2"
+              placeholder="http://127.0.0.1:PORTA/?state=...&code=..."
+            ></textarea>
+            <button class="btn primary sm" onclick={finishManual} disabled={!manualUrl.trim()}>
+              Concluir conexão
+            </button>
+          </div>
+        {/if}
+
+        {#if accounts.length === 0}
+          <p class="muted small">Nenhuma conta conectada.</p>
+        {:else}
+          {#each accounts as acc (acc.email)}
+            <div class="account">
+              <div class="acc-row">
+                <div class="acc-id">
+                  <span class="acc-name">{acc.display_name}</span>
+                  {#if acc.display_name !== acc.email}<span class="acc-mail">{acc.email}</span>{/if}
+                </div>
+                <div class="acc-actions">
+                  <button class="btn ghost sm" onclick={() => (expanded[acc.email] = !expanded[acc.email])}>
+                    {expanded[acc.email] ? "▾" : "▸"} Calendários
+                  </button>
+                  <button class="btn danger sm" onclick={() => remove(acc.email)}>Remover</button>
+                </div>
+              </div>
+              {#if expanded[acc.email]}
+                <div class="cals">
+                  {#each calendars[acc.email] ?? [] as cal (cal.id)}
+                    <label class="cal">
+                      <input type="checkbox" checked={cal.selected} onchange={() => toggleCalendar(cal)} />
+                      <span class="dot" style="background:{dotColor(cal.color)}"></span>
+                      <span class="cal-name">{cal.summary || cal.id}</span>
+                      {#if cal.is_primary}<span class="badge">principal</span>{/if}
+                    </label>
+                  {/each}
+                  <button class="btn ghost xs" onclick={() => reloadCalendars(acc.email)}>
+                    Recarregar calendários
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h3>Notificações & Sincronização</h3></div>
+        <div class="settings">
+          <div class="set-row">
+            <span>Avisar</span>
+            <input class="num" type="number" min="0" max="1440" bind:value={leadMinutes} onchange={saveLead} />
+            <span>minutos antes</span>
+          </div>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
+            <span>Tocar som na notificação</span>
+          </label>
+          <div class="set-row">
+            <span>Sincronizar automaticamente</span>
+            <select bind:value={pollMinutes} onchange={savePoll}>
+              <option value={30}>a cada 30 minutos</option>
+              <option value={60}>a cada 1 hora</option>
+              <option value={240}>a cada 4 horas</option>
+              <option value={360}>a cada 6 horas</option>
+              <option value={720}>a cada 12 horas</option>
+              <option value={1440}>a cada 24 horas</option>
+            </select>
+          </div>
+          <button class="btn ghost sm" onclick={testNotif}>Testar notificação</button>
+        </div>
+      </section>
     {/if}
-  </section>
+  </div>
 
   {#if status}
-    <p class="status">{status}</p>
+    <div class="status" class:err={status.startsWith("Erro") || offline}>{status}</div>
   {/if}
-</main>
+</div>
 
 <style>
-  :root {
-    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-    color: #0f0f0f;
-    background-color: #f6f6f6;
-  }
-  .container {
-    max-width: 620px;
-    margin: 0 auto;
-    padding: 1.5rem;
+  :global(body) { margin: 0; }
+  :global(html, body) { height: 100%; }
+
+  .app {
+    --accent: #6366f1;
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --text: #1a1a1e;
+    --muted: #71717a;
+    --border: #ececf0;
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  h1 {
-    margin: 0;
-    font-size: 1.5rem;
-  }
-  h2 {
-    margin: 0.5rem 0 0.25rem;
-    font-size: 1rem;
-    opacity: 0.7;
-  }
-  button {
-    border-radius: 8px;
-    border: 1px solid transparent;
-    padding: 0.5em 1em;
-    font-size: 0.9em;
-    font-weight: 500;
-    font-family: inherit;
-    color: #fff;
-    background-color: #396cd8;
-    cursor: pointer;
-    transition: filter 0.2s;
-  }
-  button:hover:not(:disabled) {
-    filter: brightness(1.08);
-  }
-  button:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-  button.sync {
-    background: #2e8b57;
-  }
-  button.ghost {
-    background: transparent;
-    color: #396cd8;
-    border-color: #396cd8;
-  }
-  button.danger {
-    background: transparent;
-    color: #c0392b;
-    border-color: #c0392b;
-  }
-  button.tiny {
-    font-size: 0.8em;
-    padding: 0.3em 0.6em;
-    align-self: flex-start;
-  }
-  .accounts,
-  .events {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .accounts li {
-    padding: 0.6rem 0.8rem;
-    background: #fff;
-    border-radius: 10px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  }
-  .acc-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-  .acc-info {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  .name {
-    font-weight: 600;
-  }
-  .email {
-    font-size: 0.82em;
-    opacity: 0.65;
-  }
-  .acc-actions {
-    display: flex;
-    gap: 0.4rem;
-    flex-shrink: 0;
-  }
-  .cals {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    margin-top: 0.6rem;
-    padding-top: 0.6rem;
-    border-top: 1px solid #eee;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-  .cal {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9em;
-  }
-  .badge {
-    font-size: 0.7em;
-    background: #396cd8;
-    color: #fff;
-    padding: 0.05em 0.4em;
-    border-radius: 6px;
-  }
-  .events li {
-    display: flex;
-    flex-direction: column;
-    padding: 0.5rem 0.7rem;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  }
-  .when {
-    font-size: 0.78em;
-    opacity: 0.6;
-    text-transform: capitalize;
-  }
-  .title {
-    font-weight: 500;
-  }
-  .title a {
-    color: inherit;
-    text-decoration: none;
-  }
-  .title a:hover {
-    text-decoration: underline;
-  }
-  .empty,
-  .status {
-    font-size: 0.9em;
-    opacity: 0.85;
-  }
-  .status {
-    margin-top: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    background: #eef;
-    border-radius: 8px;
-  }
-  .auth-flow {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.75rem;
-    border: 1px dashed #888;
-    border-radius: 10px;
-  }
-  .auth-flow .step {
-    margin: 0;
-    font-size: 0.9em;
-  }
-  .url-box {
-    width: 100%;
-    font-size: 0.75em;
-    font-family: monospace;
-    resize: vertical;
-    border-radius: 6px;
-    padding: 0.4rem;
     box-sizing: border-box;
   }
-  .lead-row {
+
+  .topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+    padding: 0.9rem 1.1rem;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
   }
-  .lead-row label {
-    font-size: 0.95em;
+  .brand { display: flex; align-items: center; gap: 0.7rem; }
+  .logo {
+    width: 2.3rem; height: 2.3rem; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    border-radius: 11px;
   }
-  .lead-row input[type="number"] {
-    width: 4rem;
-    padding: 0.3em 0.4em;
-    border-radius: 6px;
-    border: 1px solid #bbb;
-    font-size: 0.95em;
-    text-align: center;
+  h1 { margin: 0; font-size: 1.15rem; line-height: 1.1; }
+  .sub { font-size: 0.76rem; color: var(--muted); }
+  .offline { color: #e0483d; font-weight: 600; }
+  .actions { display: flex; align-items: center; gap: 0.5rem; }
+
+  .btn {
+    border: 1px solid transparent; border-radius: 9px; padding: 0.5em 0.9em;
+    font: inherit; font-weight: 600; font-size: 0.86rem; cursor: pointer;
+    transition: filter 0.15s, background 0.15s; white-space: nowrap;
   }
-  .lead-row select {
-    padding: 0.3em 0.4em;
-    border-radius: 6px;
-    border: 1px solid #bbb;
-    font-size: 0.95em;
-    font-family: inherit;
+  .btn.sm { font-size: 0.8rem; padding: 0.4em 0.7em; }
+  .btn.xs { font-size: 0.75rem; padding: 0.3em 0.55em; align-self: flex-start; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn.ghost { background: transparent; color: var(--accent); border-color: var(--border); }
+  .btn.ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .btn.danger { background: transparent; color: #e0483d; }
+  .btn.danger:hover:not(:disabled) { background: color-mix(in srgb, #e0483d 10%, transparent); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .icon-btn {
+    width: 2.1rem; height: 2.1rem; border-radius: 9px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); cursor: pointer; font-size: 1rem;
+    display: grid; place-items: center; transition: background 0.15s;
   }
-  .lead-row label.check {
+  .icon-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .icon-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
+
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1.1rem;
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    flex-direction: column;
+    gap: 1rem;
   }
+
+  /* eventos */
+  .day-group { display: flex; flex-direction: column; gap: 0.25rem; }
+  .day-label {
+    margin: 0 0 0.15rem; font-size: 0.78rem; font-weight: 700;
+    text-transform: capitalize; color: var(--muted);
+  }
+  .event {
+    display: flex; align-items: center; gap: 0.7rem; width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.55rem 0.8rem; cursor: pointer; font: inherit; color: inherit;
+    transition: border-color 0.15s;
+  }
+  .event:hover { border-color: var(--accent); }
+  .time {
+    font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 4rem;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .ev-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--muted); margin: auto 0; }
+  .empty-emoji { font-size: 2rem; margin-bottom: 0.3rem; }
+  .empty p { margin: 0.3rem 0 0.8rem; }
+
+  /* cards (settings) */
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; }
+  .card h3 { margin: 0; font-size: 0.95rem; }
+
+  .account { border-top: 1px solid var(--border); padding-top: 0.6rem; }
+  .account:first-of-type { border-top: none; padding-top: 0; }
+  .acc-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .acc-id { display: flex; flex-direction: column; overflow: hidden; }
+  .acc-name { font-weight: 600; }
+  .acc-mail { font-size: 0.78rem; color: var(--muted); }
+  .acc-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
+
+  .cals {
+    display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem;
+    max-height: 220px; overflow-y: auto; padding-right: 0.2rem;
+  }
+  .cal { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; cursor: pointer; }
+  .cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge {
+    font-size: 0.68rem; background: var(--accent); color: #fff;
+    padding: 0.05em 0.45em; border-radius: 6px;
+  }
+
+  .settings { display: flex; flex-direction: column; gap: 0.6rem; }
+  .set-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; flex-wrap: wrap; }
+  .set-row.check { cursor: pointer; }
+  .num {
+    width: 3.5rem; padding: 0.3em 0.4em; border-radius: 7px; border: 1px solid var(--border);
+    font: inherit; text-align: center; background: var(--bg); color: var(--text);
+  }
+  select {
+    padding: 0.35em 0.5em; border-radius: 7px; border: 1px solid var(--border);
+    font: inherit; background: var(--bg); color: var(--text);
+  }
+
+  .auth-flow {
+    display: flex; flex-direction: column; gap: 0.4rem; padding: 0.7rem;
+    border: 1px dashed var(--muted); border-radius: 10px;
+  }
+  .step { margin: 0; font-size: 0.85rem; }
+  .url-box {
+    width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.75rem;
+    border-radius: 7px; padding: 0.4rem; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); resize: vertical;
+  }
+
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
+  .status {
+    flex-shrink: 0; margin: 0; font-size: 0.83rem; padding: 0.5rem 1.1rem;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .status.err { background: color-mix(in srgb, #e0483d 12%, transparent); }
+
   @media (prefers-color-scheme: dark) {
-    :root {
-      color: #f6f6f6;
-      background-color: #2f2f2f;
-    }
-    .accounts li,
-    .events li {
-      background: #3a3a3a;
-      box-shadow: none;
-    }
-    .cals {
-      border-top-color: #4a4a4a;
-    }
-    .status {
-      background: #33384d;
+    .app {
+      --bg: #17171b; --card: #232329; --text: #ececf0; --muted: #9b9ba4; --border: #33333c;
     }
   }
 </style>
