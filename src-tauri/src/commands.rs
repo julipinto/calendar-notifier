@@ -7,23 +7,27 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{auth, config, google, scheduler, secrets, store};
 
-/// Traduz erros técnicos em mensagens amigáveis (sem internet, timeout, etc.).
+/// True se o erro é de rede (sem internet / timeout).
+fn is_network_err(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<reqwest::Error>()
+            .map(|re| re.is_connect() || re.is_timeout())
+            .unwrap_or(false)
+    })
+}
+
+/// Traduz erros técnicos em mensagens amigáveis (sem internet, token, etc.).
 pub(crate) fn friendly_err(e: &anyhow::Error) -> String {
-    // procura um erro de reqwest na cadeia de causas
+    if is_network_err(e) {
+        return "Sem conexão com a internet (não consegui falar com o Google). \
+                Vou tentar de novo na próxima sincronização."
+            .to_string();
+    }
     for cause in e.chain() {
         if let Some(re) = cause.downcast_ref::<reqwest::Error>() {
-            if re.is_connect() || re.is_timeout() {
-                return "Sem conexão com a internet (não consegui falar com o Google). \
-                        Vou tentar de novo na próxima sincronização."
-                    .to_string();
-            }
-            if re.is_status() {
-                if let Some(s) = re.status() {
-                    if s.as_u16() == 401 || s.as_u16() == 403 {
-                        return "Autorização recusada pelo Google (token expirado ou \
-                                permissão revogada). Reconecte a conta."
-                            .to_string();
-                    }
+            if let Some(s) = re.status() {
+                if matches!(s.as_u16(), 400 | 401 | 403) {
+                    return "Autorização expirada ou revogada. Reconecte a conta.".to_string();
                 }
             }
         }
@@ -31,16 +35,25 @@ pub(crate) fn friendly_err(e: &anyhow::Error) -> String {
     e.to_string()
 }
 
-/// Obtém um access_token novo para a conta (via refresh_token).
+/// Obtém um access_token novo para a conta (via refresh_token). Se o refresh
+/// falhar por motivo que não seja rede, marca a conta como "precisa reconectar".
 async fn access_token_for(email: &str) -> Result<String, String> {
     let creds = config::client_creds();
     let rt = secrets::get_refresh_token(email)
         .map_err(|e| e.to_string())?
         .ok_or("conta sem refresh token — reconecte")?;
-    let (at, _) = auth::refresh_access_token(&creds, &rt)
-        .await
-        .map_err(|e| friendly_err(&e))?;
-    Ok(at)
+    match auth::refresh_access_token(&creds, &rt).await {
+        Ok((at, _)) => {
+            let _ = store::set_account_reauth(email, false);
+            Ok(at)
+        }
+        Err(e) => {
+            if !is_network_err(&e) {
+                let _ = store::set_account_reauth(email, true);
+            }
+            Err(friendly_err(&e))
+        }
+    }
 }
 
 /// Busca os calendários da conta e os salva. Calendários novos: só o principal
@@ -68,6 +81,8 @@ fn window_30d() -> (String, String) {
 pub struct AccountInfo {
     pub email: String,
     pub display_name: String,
+    #[serde(default)]
+    pub needs_reauth: bool,
 }
 
 /// Contexto PKCE da autorização em andamento, guardado entre `start_auth` e a
@@ -125,6 +140,7 @@ pub async fn start_auth(
                     AccountInfo {
                         email: c.email,
                         display_name: c.display_name,
+                        needs_reauth: false,
                     },
                 );
             }
@@ -178,6 +194,7 @@ pub async fn finish_auth_manual(
     Ok(AccountInfo {
         email: c.email,
         display_name: c.display_name,
+        needs_reauth: false,
     })
 }
 
@@ -189,6 +206,7 @@ pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
         .map(|a| AccountInfo {
             email: a.email,
             display_name: a.display_name,
+            needs_reauth: a.needs_reauth,
         })
         .collect())
 }

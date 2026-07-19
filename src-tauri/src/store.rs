@@ -26,7 +26,8 @@ pub fn init() -> Result<()> {
         "CREATE TABLE IF NOT EXISTS accounts (
             email        TEXT PRIMARY KEY,
             display_name TEXT,
-            created_at   INTEGER NOT NULL
+            created_at   INTEGER NOT NULL,
+            needs_reauth INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS calendars (
             id            TEXT NOT NULL,
@@ -65,6 +66,10 @@ pub fn init() -> Result<()> {
         "ALTER TABLE calendars ADD COLUMN color TEXT NOT NULL DEFAULT ''",
         [],
     );
+    let _ = c.execute(
+        "ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(())
 }
 
@@ -94,6 +99,7 @@ pub fn set_setting(key: &str, value: &str) -> Result<()> {
 pub struct Account {
     pub email: String,
     pub display_name: String,
+    pub needs_reauth: bool,
 }
 
 pub fn upsert_account(email: &str, display_name: &str) -> Result<()> {
@@ -102,23 +108,38 @@ pub fn upsert_account(email: &str, display_name: &str) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
+    // conectar/reconectar sempre zera o needs_reauth (token novo em mãos)
     c.execute(
-        "INSERT INTO accounts (email, display_name, created_at)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(email) DO UPDATE SET display_name = excluded.display_name",
+        "INSERT INTO accounts (email, display_name, created_at, needs_reauth)
+         VALUES (?1, ?2, ?3, 0)
+         ON CONFLICT(email) DO UPDATE SET
+            display_name = excluded.display_name,
+            needs_reauth = 0",
         rusqlite::params![email, display_name, now],
+    )?;
+    Ok(())
+}
+
+/// Marca/desmarca a conta como precisando reconectar (token inválido/revogado).
+pub fn set_account_reauth(email: &str, needs: bool) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "UPDATE accounts SET needs_reauth = ?1 WHERE email = ?2",
+        rusqlite::params![needs as i64, email],
     )?;
     Ok(())
 }
 
 pub fn list_accounts() -> Result<Vec<Account>> {
     let c = conn()?;
-    let mut stmt = c.prepare("SELECT email, display_name FROM accounts ORDER BY created_at")?;
+    let mut stmt =
+        c.prepare("SELECT email, display_name, needs_reauth FROM accounts ORDER BY created_at")?;
     let rows = stmt
         .query_map([], |r| {
             Ok(Account {
                 email: r.get(0)?,
                 display_name: r.get(1)?,
+                needs_reauth: r.get::<_, i64>(2)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

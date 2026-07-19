@@ -40,6 +40,14 @@ urlencoding = "2.1.3"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 
+# Keychain nativo p/ o refresh token (Windows/macOS). No Linux não há Secret
+# Service no WSL, então lá usamos o fallback de arquivo 0600 (ver secrets.rs).
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
 # zbus 5.18.0 (e 5.17.0) tem reborrows inválidos em connection/socket/command.rs
 # (transporte "Command", não usado por notificações desktop) que não compilam
 # no rustc atual. Vendorizamos e corrigimos as 5 chamadas p/ `&mut *self`.

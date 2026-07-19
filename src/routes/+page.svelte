@@ -4,7 +4,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
 
-  type Account = { email: string; display_name: string };
+  type Account = { email: string; display_name: string; needs_reauth: boolean };
   type Calendar = {
     id: string;
     account_email: string;
@@ -51,6 +51,10 @@
   }
   async function loadCalendars(email: string) {
     calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
+  }
+  // atualiza só a lista de contas (p/ refletir o badge "reconectar") sem recarregar calendários
+  async function refreshAccountFlags() {
+    accounts = await invoke<Account[]>("list_accounts");
   }
   async function loadEvents() {
     events = await invoke<CalEvent[]>("list_events");
@@ -171,6 +175,7 @@
       status = `${e}`;
     } finally {
       syncing = false;
+      await refreshAccountFlags(); // reflete "reconectar" se o token falhou
     }
   }
   async function testNotif() {
@@ -274,9 +279,11 @@
         offline = false;
         loadEvents();
         loadLastSync();
+        refreshAccountFlags();
       }),
       listen<string>("sync-error", (e) => {
         offline = String(e.payload).includes("internet");
+        refreshAccountFlags();
       }),
     ];
     const tick = setInterval(() => (nowTick += 1), 30000);
@@ -391,16 +398,25 @@
             <div class="account">
               <div class="acc-row">
                 <div class="acc-id">
-                  <span class="acc-name">{acc.display_name}</span>
+                  <span class="acc-name">
+                    {acc.display_name}
+                    {#if acc.needs_reauth}<span class="badge warn">reconectar</span>{/if}
+                  </span>
                   {#if acc.display_name !== acc.email}<span class="acc-mail">{acc.email}</span>{/if}
                 </div>
                 <div class="acc-actions">
+                  {#if acc.needs_reauth}
+                    <button class="btn primary sm" onclick={connect} disabled={busy}>Reconectar</button>
+                  {/if}
                   <button class="btn ghost sm" onclick={() => (expanded[acc.email] = !expanded[acc.email])}>
                     {expanded[acc.email] ? "▾" : "▸"} Calendários
                   </button>
                   <button class="btn danger sm" onclick={() => remove(acc.email)}>Remover</button>
                 </div>
               </div>
+              {#if acc.needs_reauth}
+                <p class="reauth-hint">Autorização com o Google expirou — clique em "Reconectar" e entre com <b>{acc.email}</b>.</p>
+              {/if}
               {#if expanded[acc.email]}
                 <div class="cals">
                   {#each calendars[acc.email] ?? [] as cal (cal.id)}
@@ -584,6 +600,8 @@
     font-size: 0.68rem; background: var(--accent); color: #fff;
     padding: 0.05em 0.45em; border-radius: 6px;
   }
+  .badge.warn { background: #e0483d; }
+  .reauth-hint { margin: 0.4rem 0 0; font-size: 0.8rem; color: #e0483d; }
 
   .settings { display: flex; flex-direction: column; gap: 0.6rem; }
   .set-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; flex-wrap: wrap; }
