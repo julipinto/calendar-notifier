@@ -1,0 +1,53 @@
+name: Build Windows
+
+# Gera os instaladores Windows (.msi e .exe). Roda manualmente (workflow_dispatch)
+# ou ao criar uma tag v* (ex: v0.1.0).
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # cache do Cargo p/ builds mais rápidos
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Instalar dependências do front
+        run: npm install
+
+      # As credenciais OAuth (gitignored) vêm de um secret do repositório.
+      # Crie o secret GOOGLE_CLIENT_JSON com o conteúdo do google_client.json.
+      - name: Gravar credenciais do Google
+        shell: bash
+        run: |
+          if [ -z "$GOOGLE_CLIENT_JSON" ]; then
+            echo "::error::Secret GOOGLE_CLIENT_JSON não configurado."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_CLIENT_JSON" > src-tauri/google_client.json
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+
+      - name: Build (tauri)
+        run: npm run tauri build
+
+      - name: Publicar instaladores
+        uses: actions/upload-artifact@v4
+        with:
+          name: calendar-notifier-windows
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
