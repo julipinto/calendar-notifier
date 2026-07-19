@@ -144,12 +144,18 @@
     }
   }
   async function toggleCalendar(cal: Calendar) {
+    const nowSelected = !cal.selected;
     await invoke("set_calendar_selected", {
       email: cal.account_email,
       calendarId: cal.id,
-      selected: !cal.selected,
+      selected: nowSelected,
     });
     await loadCalendars(cal.account_email);
+    if (nowSelected) {
+      await syncNow(); // marcou: busca os eventos do calendário na hora
+    } else {
+      await loadEvents(); // desmarcou: eventos já removidos no backend, só atualiza
+    }
   }
   async function syncNow() {
     syncing = true;
