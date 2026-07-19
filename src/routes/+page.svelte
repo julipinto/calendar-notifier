@@ -236,6 +236,12 @@
     return out;
   });
 
+  // mostra a origem (calendário/conta) nos eventos quando há mais de uma fonte
+  const multiSource = $derived(
+    new Set(events.map((e) => e.account_email + "|" + e.calendar_summary)).size > 1,
+  );
+  const multiAccount = $derived(new Set(events.map((e) => e.account_email)).size > 1);
+
   // "sincronizado há X min" — recalcula quando nowTick muda (a cada 30s)
   const syncLabel = $derived.by(() => {
     nowTick;
@@ -335,7 +341,14 @@
               >
                 <span class="time">{fmtTime(ev)}</span>
                 <span class="dot" style="background:{dotColor(ev.color)}"></span>
-                <span class="ev-title">{ev.title}</span>
+                <span class="ev-main">
+                  <span class="ev-title">{ev.title}</span>
+                  {#if multiSource}
+                    <span class="ev-source">
+                      {ev.calendar_summary || "calendário"}{#if multiAccount} · {ev.account_email}{/if}
+                    </span>
+                  {/if}
+                </span>
               </button>
             {/each}
           </div>
@@ -534,7 +547,12 @@
     font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 4rem;
   }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .ev-main { display: flex; flex-direction: column; min-width: 0; gap: 0.05rem; }
   .ev-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev-source {
+    font-size: 0.72rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 
   .empty { text-align: center; padding: 2.5rem 1rem; color: var(--muted); margin: auto 0; }
   .empty-emoji { font-size: 2rem; margin-bottom: 0.3rem; }
