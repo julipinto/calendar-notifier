@@ -56,6 +56,8 @@ pub fn run() {
             commands::get_last_sync,
             commands::get_autostart,
             commands::set_autostart,
+            commands::get_account_lead,
+            commands::set_account_lead,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

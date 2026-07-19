@@ -298,6 +298,22 @@ pub fn set_lead_minutes(minutes: i64) -> Result<(), String> {
     store::set_setting("lead_minutes", &m.to_string()).map_err(|e| e.to_string())
 }
 
+/// Antecedência específica de uma conta (None = herda a global).
+#[tauri::command]
+pub fn get_account_lead(email: String) -> Result<Option<i64>, String> {
+    let v = store::get_setting(&format!("lead:{email}"), "").map_err(|e| e.to_string())?;
+    Ok(if v.is_empty() { None } else { v.parse().ok() })
+}
+
+#[tauri::command]
+pub fn set_account_lead(email: String, minutes: Option<i64>) -> Result<(), String> {
+    let val = match minutes {
+        Some(m) => m.clamp(0, 1440).to_string(),
+        None => String::new(), // vazio = herda a global
+    };
+    store::set_setting(&format!("lead:{email}"), &val).map_err(|e| e.to_string())
+}
+
 /// Dispara uma notificação de teste (para validar o canal do SO).
 #[tauri::command]
 pub fn test_notification(app: AppHandle) -> Result<(), String> {

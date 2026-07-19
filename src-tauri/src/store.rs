@@ -332,24 +332,22 @@ pub struct DueEvent {
     pub start_ts: i64,
 }
 
-/// Eventos (não dia-inteiro, ainda não notificados) cuja janela de aviso já
-/// chegou: `start - lead <= agora < start`.
-pub fn due_notifications(lead_minutes: i64) -> Result<Vec<DueEvent>> {
+/// Eventos futuros (não dia-inteiro, ainda não notificados). A janela de aviso
+/// (por conta) é aplicada pelo scheduler, que sabe a antecedência de cada conta.
+pub fn pending_notifications() -> Result<Vec<DueEvent>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let lead = lead_minutes * 60;
     let c = conn()?;
     let mut stmt = c.prepare(
         "SELECT account_email, calendar_id, id, title, start_ts
          FROM events
-         WHERE all_day = 0 AND notified = 0
-           AND (start_ts - ?1) <= ?2 AND start_ts > ?2
+         WHERE all_day = 0 AND notified = 0 AND start_ts > ?1
          ORDER BY start_ts",
     )?;
     let rows = stmt
-        .query_map(rusqlite::params![lead, now], |r| {
+        .query_map(rusqlite::params![now], |r| {
             Ok(DueEvent {
                 account_email: r.get(0)?,
                 calendar_id: r.get(1)?,

@@ -55,17 +55,32 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
+/// Antecedência (minutos) da conta: usa o override por conta se houver,
+/// senão cai no global.
+pub fn account_lead(email: &str, global: i64) -> i64 {
+    store::get_setting(&format!("lead:{email}"), "")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(global)
+}
+
 fn tick(app: &AppHandle) -> anyhow::Result<()> {
-    let lead: i64 = store::get_setting("lead_minutes", DEFAULT_LEAD)?
+    let global: i64 = store::get_setting("lead_minutes", DEFAULT_LEAD)?
         .parse()
         .unwrap_or(10);
-
     let sound_on = store::get_setting("sound_enabled", "true")
         .map(|v| v != "false")
         .unwrap_or(true);
+    let now = now();
 
-    for ev in store::due_notifications(lead)? {
-        let mins = ((ev.start_ts - now()) as f64 / 60.0).ceil().max(0.0) as i64;
+    for ev in store::pending_notifications()? {
+        let lead = account_lead(&ev.account_email, global);
+        // dentro da janela de aviso? (start - lead <= agora)
+        if ev.start_ts - lead * 60 > now {
+            continue;
+        }
+        let mins = ((ev.start_ts - now) as f64 / 60.0).ceil().max(0.0) as i64;
         let body = if mins <= 1 {
             "Começa em instantes".to_string()
         } else {

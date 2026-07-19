@@ -163,15 +163,23 @@ calendar-notifier/
   > TODO Fase 5: re-adicionar single-instance p/ Windows (evita 2 tray icons),
   > com guarda contra lock obsoleto.
 
-**Fase 5 — Polimento**
-- Reconexão/refresh robusto, tratamento de 410, ícones,
-  filtros (ignorar all-day, recusados), testes.
-- **Assinatura de código (Windows):** o SmartScreen bloqueia o app não assinado
-  ("app não reconhecido"). Contornável com "Mais informações → Executar assim
-  mesmo". Fix real: certificado de code signing (idealmente EV p/ reputação
-  imediata) e assinar o .msi/.exe no CI. TODO.
-- Re-adicionar single-instance p/ Windows (evita 2 tray icons), com guarda
-  contra lock obsoleto.
+**Fase 5 — Polimento** (em andamento)
+- ✅ Ícone próprio (calendário índigo) em todos os formatos.
+- ✅ Sistema de releases (tag `v*` → publica `.msi`/`.exe` no GitHub Releases).
+- ✅ Single-instance re-adicionado (callback foca a janela).
+- ✅ Reconexão de conta: detecta token inválido/revogado → badge + botão
+  "Reconectar" na conta (não-silencioso; OAuth exige o navegador).
+- ✅ Tokens no keychain nativo (Windows/macOS via `keyring`); arquivo 0600 no Linux.
+- ✅ Nome do produto "Calendar Notifier" (binário segue `calendar-notifier`).
+- ✅ Antecedência por conta (override do lead global, por conta).
+- **Assinatura de código (Windows):** SmartScreen bloqueia o app não assinado.
+  Contornável com "Mais informações → Executar assim mesmo". Fix real:
+  certificado de code signing (EV) + assinar `.msi`/`.exe` no CI. TODO.
+- **Ações na notificação (adiar/abrir no clique):** o plugin de notificação do
+  Tauri **não** expõe ações/clique no desktop. Precisaria contornar com
+  notify-rust (Linux) + toast XML/WinRT (Windows). Adiado. TODO.
+- Auto-update (`tauri-plugin-updater`), filtros (ignorar recusados/all-day),
+  builds macOS/Linux, testes. TODO.
 
 ## Problemas conhecidos (a retomar)
 

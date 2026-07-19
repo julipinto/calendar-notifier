@@ -27,6 +27,7 @@
 
   let accounts = $state<Account[]>([]);
   let calendars = $state<Record<string, Calendar[]>>({});
+  let accountLead = $state<Record<string, number | null>>({});
   let expanded = $state<Record<string, boolean>>({});
   let events = $state<CalEvent[]>([]);
   let busy = $state(false);
@@ -47,7 +48,17 @@
 
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
-    for (const a of accounts) await loadCalendars(a.email);
+    for (const a of accounts) {
+      await loadCalendars(a.email);
+      accountLead[a.email] = await invoke<number | null>("get_account_lead", { email: a.email });
+    }
+  }
+
+  async function saveAccountLead(email: string) {
+    const v = accountLead[email];
+    const minutes = v === null || v === undefined || (v as any) === "" ? null : Number(v);
+    await invoke("set_account_lead", { email, minutes });
+    status = minutes === null ? "Antecedência da conta: padrão global." : `Antecedência da conta: ${minutes} min.`;
   }
   async function loadCalendars(email: string) {
     calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
@@ -419,6 +430,18 @@
               {/if}
               {#if expanded[acc.email]}
                 <div class="cals">
+                  <div class="acc-lead">
+                    Avisar
+                    <input
+                      type="number"
+                      min="0"
+                      max="1440"
+                      placeholder={String(leadMinutes)}
+                      bind:value={accountLead[acc.email]}
+                      onchange={() => saveAccountLead(acc.email)}
+                    />
+                    min antes <span class="muted">(vazio = padrão global)</span>
+                  </div>
                   {#each calendars[acc.email] ?? [] as cal (cal.id)}
                     <label class="cal">
                       <input type="checkbox" checked={cal.selected} onchange={() => toggleCalendar(cal)} />
@@ -593,6 +616,16 @@
   .cals {
     display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem;
     max-height: 220px; overflow-y: auto; padding-right: 0.2rem;
+  }
+  .acc-lead {
+    display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+    font-size: 0.82rem; padding-bottom: 0.5rem; margin-bottom: 0.2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .acc-lead input {
+    width: 3.2rem; padding: 0.2em 0.35em; border-radius: 6px;
+    border: 1px solid var(--border); font: inherit; text-align: center;
+    background: var(--bg); color: var(--text);
   }
   .cal { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; cursor: pointer; }
   .cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
