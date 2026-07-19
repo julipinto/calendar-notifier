@@ -41,6 +41,7 @@
   let soundEnabled = $state(true);
   let autostart = $state(false);
   let view = $state<"events" | "settings">("events");
+  let nowTick = $state(0); // incrementa periodicamente p/ atualizar "há X min"
 
   const ACCENT = "#6366f1";
 
@@ -229,6 +230,20 @@
     return out;
   });
 
+  // "sincronizado há X min" — recalcula quando nowTick muda (a cada 30s)
+  const syncLabel = $derived.by(() => {
+    nowTick;
+    return relTime(lastSync);
+  });
+
+  // some com a mensagem de status depois de alguns segundos
+  $effect(() => {
+    if (!status) return;
+    const isErr = status.startsWith("Erro") || offline;
+    const t = setTimeout(() => (status = ""), isErr ? 7000 : 4000);
+    return () => clearTimeout(t);
+  });
+
   onMount(() => {
     loadAccounts();
     loadEvents();
@@ -252,7 +267,11 @@
         offline = String(e.payload).includes("internet");
       }),
     ];
-    return () => uns.forEach((u) => u.then((f) => f()));
+    const tick = setInterval(() => (nowTick += 1), 30000);
+    return () => {
+      uns.forEach((u) => u.then((f) => f()));
+      clearInterval(tick);
+    };
   });
 </script>
 
@@ -270,7 +289,7 @@
       <div>
         <h1>Calendar Notifier</h1>
         <span class="sub">
-          {#if offline}<span class="offline">● offline</span> · {/if}{relTime(lastSync)}
+          {#if offline}<span class="offline">● offline</span> · {/if}{syncLabel}
         </span>
       </div>
     </div>
