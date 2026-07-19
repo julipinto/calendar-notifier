@@ -24,8 +24,6 @@ pub struct Connected {
     pub email: String,
     pub display_name: String,
     pub refresh_token: String,
-    pub access_token: String,
-    pub expires_in: i64,
 }
 
 /// Estado intermediário entre `begin` e `finish`.
@@ -146,8 +144,6 @@ pub async fn exchange(
         display_name: userinfo.name.unwrap_or_else(|| email.clone()),
         email,
         refresh_token,
-        access_token: token_res.access_token,
-        expires_in: token_res.expires_in,
     })
 }
 
