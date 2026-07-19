@@ -164,8 +164,14 @@ calendar-notifier/
   > com guarda contra lock obsoleto.
 
 **Fase 5 — Polimento**
-- Reconexão/refresh robusto, tratamento de 410, start-on-login, ícones,
+- Reconexão/refresh robusto, tratamento de 410, ícones,
   filtros (ignorar all-day, recusados), testes.
+- **Assinatura de código (Windows):** o SmartScreen bloqueia o app não assinado
+  ("app não reconhecido"). Contornável com "Mais informações → Executar assim
+  mesmo". Fix real: certificado de code signing (idealmente EV p/ reputação
+  imediata) e assinar o .msi/.exe no CI. TODO.
+- Re-adicionar single-instance p/ Windows (evita 2 tray icons), com guarda
+  contra lock obsoleto.
 
 ## Problemas conhecidos (a retomar)
 
