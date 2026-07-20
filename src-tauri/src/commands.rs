@@ -503,6 +503,37 @@ pub fn set_start_minimized(enabled: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---------- resumo diário ----------
+
+#[tauri::command]
+pub fn get_daily_summary_enabled() -> Result<bool, String> {
+    Ok(pref_bool("daily_summary_enabled", false))
+}
+#[tauri::command]
+pub fn set_daily_summary_enabled(enabled: bool) -> Result<(), String> {
+    store::set_setting("daily_summary_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn get_daily_summary_time() -> Result<String, String> {
+    store::get_setting("daily_summary_time", scheduler::DEFAULT_SUMMARY_TIME)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn set_daily_summary_time(time: String) -> Result<(), String> {
+    let valid = time
+        .split_once(':')
+        .map(|(h, m)| {
+            h.parse::<u32>().map(|h| h < 24).unwrap_or(false)
+                && m.parse::<u32>().map(|m| m < 60).unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if !valid {
+        return Err("horário inválido (use HH:MM)".into());
+    }
+    store::set_setting("daily_summary_time", &time).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_minutes_csv;

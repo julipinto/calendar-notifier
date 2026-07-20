@@ -1,5 +1,6 @@
 //! Loop leve que verifica periodicamente os eventos entrando na janela de aviso
 //! e dispara notificações do sistema (uma vez por evento).
+use chrono::{Local, TimeZone};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
@@ -9,6 +10,7 @@ use crate::store;
 const TICK: Duration = Duration::from_secs(30);
 pub const DEFAULT_LEAD: &str = "10";
 pub const DEFAULT_POLL: &str = "60";
+pub const DEFAULT_SUMMARY_TIME: &str = "08:00";
 
 /// Inicia o loop de notificações em background.
 pub fn start(app: AppHandle) {
@@ -125,6 +127,99 @@ fn tick(app: &AppHandle) -> anyhow::Result<()> {
             store::add_notified_lead(&ev.account_email, &ev.calendar_id, &ev.id, lead)?;
         }
     }
+
+    let _ = maybe_daily_summary(app, sound_on);
+    Ok(())
+}
+
+fn parse_hhmm(s: &str) -> Option<(u32, u32)> {
+    let (h, m) = s.split_once(':')?;
+    Some((h.trim().parse().ok()?, m.trim().parse().ok()?))
+}
+
+/// Dia do evento (igual à UI): all-day usa data UTC; com horário usa data local.
+fn event_day(start_ts: i64, all_day: bool) -> chrono::NaiveDate {
+    let dt = chrono::DateTime::from_timestamp(start_ts, 0).unwrap_or_default();
+    if all_day {
+        dt.date_naive()
+    } else {
+        dt.with_timezone(&Local).date_naive()
+    }
+}
+
+/// Uma vez por dia, no horário configurado, notifica o resumo dos eventos de hoje
+/// (todos os tipos). Só dispara se houver eventos. Marca o dia como enviado.
+fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
+    if store::get_setting("daily_summary_enabled", "false")? == "false" {
+        return Ok(());
+    }
+    let (hh, mm) = parse_hhmm(&store::get_setting(
+        "daily_summary_time",
+        DEFAULT_SUMMARY_TIME,
+    )?)
+    .unwrap_or((8, 0));
+
+    let now = Local::now();
+    let today = now.date_naive();
+    let scheduled = match today.and_hms_opt(hh, mm, 0) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    if now.naive_local() < scheduled {
+        return Ok(()); // ainda não chegou a hora hoje
+    }
+    let today_str = today.to_string();
+    if store::get_setting("daily_summary_last", "")? == today_str {
+        return Ok(()); // já enviado hoje
+    }
+
+    // janela ampla (ontem→depois de amanhã) e filtra pelos que são "hoje"
+    let from = today
+        .pred_opt()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|n| Local.from_local_datetime(&n).single())
+        .map(|d| d.timestamp())
+        .unwrap_or(0);
+    let to = today
+        .succ_opt()
+        .and_then(|d| d.succ_opt())
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|n| Local.from_local_datetime(&n).single())
+        .map(|d| d.timestamp())
+        .unwrap_or(i64::MAX);
+
+    let items: Vec<store::SummaryItem> = store::events_in_range(from, to)?
+        .into_iter()
+        .filter(|it| event_day(it.start_ts, it.all_day) == today)
+        .collect();
+
+    // marca como processado hoje (mesmo sem eventos, p/ não reprocessar o dia)
+    store::set_setting("daily_summary_last", &today_str)?;
+    if items.is_empty() {
+        return Ok(()); // "caso tenha" — nada hoje, não notifica
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for it in items.iter().take(10) {
+        if it.all_day {
+            lines.push(format!("• {}", it.title));
+        } else {
+            let hm = chrono::DateTime::from_timestamp(it.start_ts, 0)
+                .unwrap_or_default()
+                .with_timezone(&Local)
+                .format("%H:%M");
+            lines.push(format!("{hm} {}", it.title));
+        }
+    }
+    if items.len() > 10 {
+        lines.push(format!("+{} mais", items.len() - 10));
+    }
+    let title = format!("Resumo de hoje — {} evento(s)", items.len());
+    let mut b = app.notification().builder().title(&title).body(&lines.join("\n"));
+    if sound_on {
+        b = b.sound("Default");
+    }
+    let _ = b.show();
     Ok(())
 }
 

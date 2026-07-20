@@ -41,6 +41,8 @@
   let ignoreDeclined = $state(true);
   let ignoreAllDay = $state(false);
   let startMinimized = $state(true);
+  let dailySummaryEnabled = $state(false);
+  let dailySummaryTime = $state("08:00");
   let search = $state("");
   let eventView = $state<"list" | "month">("list");
   let monthCursor = $state(new Date()); // mês exibido na visão de calendário
@@ -109,6 +111,21 @@
     ignoreDeclined = await invoke<boolean>("get_ignore_declined");
     ignoreAllDay = await invoke<boolean>("get_ignore_all_day");
     startMinimized = await invoke<boolean>("get_start_minimized");
+  }
+  async function loadDailySummary() {
+    dailySummaryEnabled = await invoke<boolean>("get_daily_summary_enabled");
+    dailySummaryTime = await invoke<string>("get_daily_summary_time");
+  }
+  async function saveDailySummary() {
+    await invoke("set_daily_summary_enabled", { enabled: dailySummaryEnabled });
+    try {
+      await invoke("set_daily_summary_time", { time: dailySummaryTime });
+      status = dailySummaryEnabled
+        ? `Resumo diário às ${dailySummaryTime}.`
+        : "Resumo diário desligado.";
+    } catch (e) {
+      status = `Erro: ${e}`;
+    }
   }
   async function saveFilters() {
     await invoke("set_ignore_declined", { enabled: ignoreDeclined });
@@ -366,6 +383,7 @@
     loadPoll();
     loadSound();
     loadFilters();
+    loadDailySummary();
     loadAutostart();
     loadLastSync();
     const uns = [
@@ -643,6 +661,18 @@
             <span>Ignorar eventos de dia inteiro</span>
           </label>
 
+          <h4 class="sub-h">Resumo diário</h4>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={dailySummaryEnabled} onchange={saveDailySummary} />
+            <span>Enviar um resumo dos eventos do dia</span>
+          </label>
+          {#if dailySummaryEnabled}
+            <div class="set-row">
+              <span>Todo dia às</span>
+              <input type="time" bind:value={dailySummaryTime} onchange={saveDailySummary} />
+            </div>
+          {/if}
+
           <h4 class="sub-h">Inicialização</h4>
           <label class="set-row check">
             <input type="checkbox" bind:checked={autostart} onchange={saveAutostart} />
@@ -871,7 +901,7 @@
   }
   .more { font-size: 0.65rem; color: var(--muted); }
 
-  select {
+  select, input[type="time"] {
     padding: 0.35em 0.5em; border-radius: 7px; border: 1px solid var(--border);
     font: inherit; background: var(--bg); color: var(--text);
   }

@@ -444,3 +444,30 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
+
+/// Item simples para o resumo diário (título + início + dia-inteiro).
+#[derive(Clone)]
+pub struct SummaryItem {
+    pub title: String,
+    pub start_ts: i64,
+    pub all_day: bool,
+}
+
+/// Eventos com início em [from, to) — todos os tipos, sem filtros.
+pub fn events_in_range(from: i64, to: i64) -> Result<Vec<SummaryItem>> {
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT title, start_ts, all_day FROM events
+         WHERE start_ts >= ?1 AND start_ts < ?2 ORDER BY start_ts",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![from, to], |r| {
+            Ok(SummaryItem {
+                title: r.get(0)?,
+                start_ts: r.get(1)?,
+                all_day: r.get::<_, i64>(2)? != 0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}

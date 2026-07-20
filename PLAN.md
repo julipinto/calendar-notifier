@@ -180,6 +180,9 @@ calendar-notifier/
 - ✅ **Iniciar em segundo plano** (autostart passa `--minimized`; toggle na config).
 - ✅ Correção do indicador de origem (mostrava o e-mail 2x no calendário principal).
 - ✅ **Testes** (unitários da lógica pura: pkce, parse de avisos/CSV).
+- ✅ **UI de avisos** como lista de campos (+ aviso / ×) em vez de texto.
+- ✅ **Resumo diário** opcional: no horário configurado, notifica a agenda do
+  dia (todos os tipos); só dispara se houver eventos; 1x/dia (`daily_summary_*`).
 - **Assinatura de código (Windows):** SmartScreen bloqueia o app não assinado.
   Fix real: certificado (EV) + assinar `.msi`/`.exe` no CI. TODO.
 - **Ações na notificação (adiar/abrir no clique):** o plugin do Tauri **não**

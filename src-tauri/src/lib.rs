@@ -83,6 +83,10 @@ pub fn run() {
             commands::set_ignore_all_day,
             commands::get_start_minimized,
             commands::set_start_minimized,
+            commands::get_daily_summary_enabled,
+            commands::set_daily_summary_enabled,
+            commands::get_daily_summary_time,
+            commands::set_daily_summary_time,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
