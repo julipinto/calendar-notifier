@@ -51,6 +51,7 @@ pub struct EventItem {
     pub all_day: bool,
     pub status: String,
     pub html_link: String,
+    pub declined: bool,
 }
 
 /// Busca os eventos de um calendário numa janela [time_min, time_max].
@@ -127,6 +128,16 @@ fn parse_event(e: RawEvent) -> Option<EventItem> {
         .as_ref()
         .and_then(parse_time)
         .unwrap_or((start_ts, all_day));
+    // recusado = o próprio usuário (attendee self) respondeu "declined"
+    let declined = e
+        .attendees
+        .as_ref()
+        .map(|list| {
+            list.iter().any(|a| {
+                a.is_self == Some(true) && a.response_status.as_deref() == Some("declined")
+            })
+        })
+        .unwrap_or(false);
     Some(EventItem {
         id: e.id,
         title: e.summary.unwrap_or_else(|| "(sem título)".into()),
@@ -135,6 +146,7 @@ fn parse_event(e: RawEvent) -> Option<EventItem> {
         all_day,
         status: e.status.unwrap_or_default(),
         html_link: e.html_link.unwrap_or_default(),
+        declined,
     })
 }
 
@@ -170,6 +182,15 @@ struct RawEvent {
     html_link: Option<String>,
     start: Option<EventTime>,
     end: Option<EventTime>,
+    #[serde(default)]
+    attendees: Option<Vec<Attendee>>,
+}
+#[derive(Deserialize)]
+struct Attendee {
+    #[serde(rename = "self", default)]
+    is_self: Option<bool>,
+    #[serde(rename = "responseStatus", default)]
+    response_status: Option<String>,
 }
 #[derive(Deserialize)]
 struct EventTime {

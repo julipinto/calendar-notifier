@@ -240,3 +240,17 @@ struct UserInfo {
     #[serde(default)]
     name: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{b64url, pkce};
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn pkce_challenge_matches_sha256_of_verifier() {
+        let (verifier, challenge) = pkce().unwrap();
+        assert!(verifier.len() >= 43, "verifier deve ter >=43 chars");
+        let expected = b64url(Sha256::digest(verifier.as_bytes()).as_slice());
+        assert_eq!(challenge, expected);
+    }
+}

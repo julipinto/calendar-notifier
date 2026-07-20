@@ -172,14 +172,20 @@ calendar-notifier/
 - ✅ Tokens no keychain nativo (Windows/macOS via `keyring`); arquivo 0600 no Linux.
 - ✅ Nome do produto "Calendar Notifier" (binário segue `calendar-notifier`).
 - ✅ Antecedência por conta (override do lead global, por conta).
+- ✅ **Múltiplos avisos** (lista de minutos, ex.: 10 e 2) — global e por conta;
+  cada aviso disparado é rastreado por evento (`notified_leads`).
+- ✅ **Filtros**: ignorar recusados (attendee self=declined) e ignorar dia-inteiro.
+- ✅ **Busca** de evento por título.
+- ✅ **Visão de mês** (grade) + toggle Lista/Mês.
+- ✅ **Iniciar em segundo plano** (autostart passa `--minimized`; toggle na config).
+- ✅ Correção do indicador de origem (mostrava o e-mail 2x no calendário principal).
+- ✅ **Testes** (unitários da lógica pura: pkce, parse de avisos/CSV).
 - **Assinatura de código (Windows):** SmartScreen bloqueia o app não assinado.
-  Contornável com "Mais informações → Executar assim mesmo". Fix real:
-  certificado de code signing (EV) + assinar `.msi`/`.exe` no CI. TODO.
-- **Ações na notificação (adiar/abrir no clique):** o plugin de notificação do
-  Tauri **não** expõe ações/clique no desktop. Precisaria contornar com
-  notify-rust (Linux) + toast XML/WinRT (Windows). Adiado. TODO.
-- Auto-update (`tauri-plugin-updater`), filtros (ignorar recusados/all-day),
-  builds macOS/Linux, testes. TODO.
+  Fix real: certificado (EV) + assinar `.msi`/`.exe` no CI. TODO.
+- **Ações na notificação (adiar/abrir no clique):** o plugin do Tauri **não**
+  expõe ações/clique no desktop. Precisa de código custom por plataforma
+  (notify-rust/WinRT). **Adiado** (risco de quebrar as notificações). TODO.
+- Auto-update (`tauri-plugin-updater`), builds macOS/Linux. TODO.
 
 ## Problemas conhecidos (a retomar)
 

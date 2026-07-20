@@ -27,7 +27,7 @@
 
   let accounts = $state<Account[]>([]);
   let calendars = $state<Record<string, Calendar[]>>({});
-  let accountLead = $state<Record<string, number | null>>({});
+  let accountReminders = $state<Record<string, string>>({});
   let expanded = $state<Record<string, boolean>>({});
   let events = $state<CalEvent[]>([]);
   let busy = $state(false);
@@ -37,7 +37,13 @@
   let lastSync = $state(0);
   let authUrl = $state("");
   let manualUrl = $state("");
-  let leadMinutes = $state(10);
+  let remindersText = $state("10");
+  let ignoreDeclined = $state(true);
+  let ignoreAllDay = $state(false);
+  let startMinimized = $state(true);
+  let search = $state("");
+  let eventView = $state<"list" | "month">("list");
+  let monthCursor = $state(new Date()); // mês exibido na visão de calendário
   let pollMinutes = $state(60);
   let soundEnabled = $state(true);
   let autostart = $state(false);
@@ -46,19 +52,26 @@
 
   const ACCENT = "#6366f1";
 
+  // "10, 2" → [10, 2]
+  function parseMins(text: string): number[] {
+    return text
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n));
+  }
+
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
     for (const a of accounts) {
       await loadCalendars(a.email);
-      accountLead[a.email] = await invoke<number | null>("get_account_lead", { email: a.email });
+      const r = await invoke<number[] | null>("get_account_reminders", { email: a.email });
+      accountReminders[a.email] = r ? r.join(", ") : "";
     }
   }
 
-  async function saveAccountLead(email: string) {
-    const v = accountLead[email];
-    const minutes = v === null || v === undefined || (v as any) === "" ? null : Number(v);
-    await invoke("set_account_lead", { email, minutes });
-    status = minutes === null ? "Antecedência da conta: padrão global." : `Antecedência da conta: ${minutes} min.`;
+  async function saveAccountReminders(email: string) {
+    const mins = parseMins(accountReminders[email] ?? "");
+    await invoke("set_account_reminders", { email, minutes: mins.length ? mins : null });
   }
   async function loadCalendars(email: string) {
     calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
@@ -70,8 +83,14 @@
   async function loadEvents() {
     events = await invoke<CalEvent[]>("list_events");
   }
-  async function loadLead() {
-    leadMinutes = await invoke<number>("get_lead_minutes");
+  async function loadReminders() {
+    const r = await invoke<number[]>("get_reminders");
+    remindersText = r.join(", ");
+  }
+  async function saveReminders() {
+    const mins = parseMins(remindersText);
+    await invoke("set_reminders", { minutes: mins.length ? mins : [10] });
+    status = `Avisos: ${(mins.length ? mins : [10]).join(", ")} min antes.`;
   }
   async function loadPoll() {
     const v = await invoke<number>("get_poll_minutes");
@@ -79,6 +98,20 @@
   }
   async function loadSound() {
     soundEnabled = await invoke<boolean>("get_sound_enabled");
+  }
+  async function loadFilters() {
+    ignoreDeclined = await invoke<boolean>("get_ignore_declined");
+    ignoreAllDay = await invoke<boolean>("get_ignore_all_day");
+    startMinimized = await invoke<boolean>("get_start_minimized");
+  }
+  async function saveFilters() {
+    await invoke("set_ignore_declined", { enabled: ignoreDeclined });
+    await invoke("set_ignore_all_day", { enabled: ignoreAllDay });
+    await loadEvents();
+  }
+  async function saveStartMinimized() {
+    await invoke("set_start_minimized", { enabled: startMinimized });
+    status = startMinimized ? "Vai iniciar em segundo plano." : "Vai abrir a janela ao iniciar.";
   }
   async function loadLastSync() {
     try {
@@ -88,9 +121,6 @@
     }
   }
 
-  async function saveLead() {
-    await invoke("set_lead_minutes", { minutes: Number(leadMinutes) });
-  }
   async function savePoll() {
     await invoke("set_poll_minutes", { minutes: Number(pollMinutes) });
   }
@@ -238,10 +268,16 @@
     return c && c.startsWith("#") ? c : ACCENT;
   }
 
+  // eventos após a busca (filtra por título)
+  const visibleEvents = $derived.by(() => {
+    const q = search.trim().toLowerCase();
+    return q ? events.filter((e) => e.title.toLowerCase().includes(q)) : events;
+  });
+
   const groups = $derived.by(() => {
     const out: { key: string; label: string; items: CalEvent[] }[] = [];
     let cur: { key: string; label: string; items: CalEvent[] } | null = null;
-    for (const e of events) {
+    for (const e of visibleEvents) {
       const { key, label } = dayInfo(e);
       if (!cur || cur.key !== key) {
         cur = { key, label, items: [] };
@@ -251,6 +287,51 @@
     }
     return out;
   });
+
+  // grade do mês (visão de calendário): 6 semanas x 7 dias, com eventos por dia
+  function ymd(d: Date): string {
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  }
+  const monthTitle = $derived(
+    monthCursor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }),
+  );
+  const monthGrid = $derived.by(() => {
+    const y = monthCursor.getFullYear();
+    const m = monthCursor.getMonth();
+    const first = new Date(y, m, 1);
+    const start = new Date(first);
+    start.setDate(1 - first.getDay()); // volta até domingo
+    // mapa data → eventos (usa data local p/ timed, UTC p/ all-day)
+    const byDay: Record<string, CalEvent[]> = {};
+    for (const e of visibleEvents) {
+      const { key } = dayInfo(e);
+      (byDay[key] ??= []).push(e);
+    }
+    const weeks: { date: Date; inMonth: boolean; today: boolean; items: CalEvent[] }[][] = [];
+    const now = new Date();
+    const todayKey = ymd(now);
+    const cur = new Date(start);
+    for (let w = 0; w < 6; w++) {
+      const week: { date: Date; inMonth: boolean; today: boolean; items: CalEvent[] }[] = [];
+      for (let d = 0; d < 7; d++) {
+        const key = `${cur.getFullYear()}-${cur.getMonth()}-${cur.getDate()}`;
+        week.push({
+          date: new Date(cur),
+          inMonth: cur.getMonth() === m,
+          today: ymd(cur) === todayKey,
+          items: byDay[key] ?? [],
+        });
+        cur.setDate(cur.getDate() + 1);
+      }
+      weeks.push(week);
+    }
+    return weeks;
+  });
+  function shiftMonth(delta: number) {
+    const d = new Date(monthCursor);
+    d.setMonth(d.getMonth() + delta);
+    monthCursor = d;
+  }
 
   // mostra a origem (calendário/conta) nos eventos quando há mais de uma fonte
   const multiSource = $derived(
@@ -275,9 +356,10 @@
   onMount(() => {
     loadAccounts();
     loadEvents();
-    loadLead();
+    loadReminders();
     loadPoll();
     loadSound();
+    loadFilters();
     loadAutostart();
     loadLastSync();
     const uns = [
@@ -339,10 +421,49 @@
 
   <div class="content">
     {#if view === "events"}
-      {#if events.length === 0}
+      <div class="events-bar">
+        <input class="search" type="search" placeholder="Buscar evento…" bind:value={search} />
+        <div class="seg">
+          <button class:on={eventView === "list"} onclick={() => (eventView = "list")}>Lista</button>
+          <button class:on={eventView === "month"} onclick={() => (eventView = "month")}>Mês</button>
+        </div>
+      </div>
+
+      {#if eventView === "month"}
+        <div class="month">
+          <div class="month-head">
+            <button class="btn ghost sm" onclick={() => shiftMonth(-1)}>‹</button>
+            <span class="month-title">{monthTitle}</span>
+            <button class="btn ghost sm" onclick={() => shiftMonth(1)}>›</button>
+          </div>
+          <div class="week-days">
+            {#each ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"] as wd}<span>{wd}</span>{/each}
+          </div>
+          {#each monthGrid as week}
+            <div class="week">
+              {#each week as cell}
+                <div class="cell" class:out={!cell.inMonth} class:today={cell.today}>
+                  <span class="cell-day">{cell.date.getDate()}</span>
+                  <div class="cell-events">
+                    {#each cell.items.slice(0, 3) as ev (ev.account_email + ev.id)}
+                      <button
+                        class="pill"
+                        style="border-left-color:{dotColor(ev.color)}"
+                        title={ev.title}
+                        onclick={() => ev.html_link && openUrl(ev.html_link)}
+                      >{ev.all_day ? "" : fmtTime(ev) + " "}{ev.title}</button>
+                    {/each}
+                    {#if cell.items.length > 3}<span class="more">+{cell.items.length - 3}</span>{/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/each}
+        </div>
+      {:else if groups.length === 0}
         <div class="empty">
           <div class="empty-emoji">🗓️</div>
-          <p>Nenhum evento nos próximos 30 dias.</p>
+          <p>{search.trim() ? "Nenhum evento encontrado." : "Nenhum evento nos próximos 30 dias."}</p>
           {#if accounts.length === 0}
             <button class="btn primary" onclick={() => (view = "settings")}>Conectar uma conta</button>
           {/if}
@@ -363,7 +484,7 @@
                   <span class="ev-title">{ev.title}</span>
                   {#if multiSource}
                     <span class="ev-source">
-                      {ev.calendar_summary || "calendário"}{#if multiAccount} · {ev.account_email}{/if}
+                      {ev.calendar_summary || ev.account_email}{#if multiAccount && ev.calendar_summary && ev.calendar_summary !== ev.account_email} · {ev.account_email}{/if}
                     </span>
                   {/if}
                 </span>
@@ -431,16 +552,15 @@
               {#if expanded[acc.email]}
                 <div class="cals">
                   <div class="acc-lead">
-                    Avisar
+                    Avisos
                     <input
-                      type="number"
-                      min="0"
-                      max="1440"
-                      placeholder={String(leadMinutes)}
-                      bind:value={accountLead[acc.email]}
-                      onchange={() => saveAccountLead(acc.email)}
+                      type="text"
+                      class="mins"
+                      placeholder={remindersText}
+                      bind:value={accountReminders[acc.email]}
+                      onchange={() => saveAccountReminders(acc.email)}
                     />
-                    min antes <span class="muted">(vazio = padrão global)</span>
+                    min antes <span class="muted">(vazio = padrão · ex.: 10, 2)</span>
                   </div>
                   {#each calendars[acc.email] ?? [] as cal (cal.id)}
                     <label class="cal">
@@ -465,16 +585,12 @@
         <div class="settings">
           <div class="set-row">
             <span>Avisar</span>
-            <input class="num" type="number" min="0" max="1440" bind:value={leadMinutes} onchange={saveLead} />
-            <span>minutos antes</span>
+            <input class="mins" type="text" bind:value={remindersText} onchange={saveReminders} />
+            <span>min antes <span class="muted">(vários: ex. 10, 2)</span></span>
           </div>
           <label class="set-row check">
             <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
             <span>Tocar som na notificação</span>
-          </label>
-          <label class="set-row check">
-            <input type="checkbox" bind:checked={autostart} onchange={saveAutostart} />
-            <span>Iniciar com o sistema</span>
           </label>
           <div class="set-row">
             <span>Sincronizar automaticamente</span>
@@ -488,6 +604,26 @@
             </select>
           </div>
           <button class="btn ghost sm" onclick={testNotif}>Testar notificação</button>
+
+          <h4 class="sub-h">Filtros</h4>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={ignoreDeclined} onchange={saveFilters} />
+            <span>Ignorar eventos recusados</span>
+          </label>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={ignoreAllDay} onchange={saveFilters} />
+            <span>Ignorar eventos de dia inteiro</span>
+          </label>
+
+          <h4 class="sub-h">Inicialização</h4>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={autostart} onchange={saveAutostart} />
+            <span>Iniciar com o sistema</span>
+          </label>
+          <label class="set-row check">
+            <input type="checkbox" bind:checked={startMinimized} onchange={saveStartMinimized} />
+            <span>Iniciar em segundo plano (sem abrir a janela)</span>
+          </label>
         </div>
       </section>
     {/if}
@@ -643,6 +779,52 @@
     width: 3.5rem; padding: 0.3em 0.4em; border-radius: 7px; border: 1px solid var(--border);
     font: inherit; text-align: center; background: var(--bg); color: var(--text);
   }
+  .mins {
+    width: 5rem; padding: 0.3em 0.5em; border-radius: 7px; border: 1px solid var(--border);
+    font: inherit; text-align: center; background: var(--bg); color: var(--text);
+  }
+  .sub-h { margin: 0.6rem 0 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+
+  /* barra de eventos: busca + toggle lista/mês */
+  .events-bar { display: flex; gap: 0.5rem; align-items: center; }
+  .search {
+    flex: 1; padding: 0.45em 0.7em; border-radius: 9px; border: 1px solid var(--border);
+    font: inherit; background: var(--card); color: var(--text);
+  }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg button {
+    border: none; background: var(--card); color: var(--text); padding: 0.45em 0.8em;
+    font: inherit; font-size: 0.85rem; cursor: pointer;
+  }
+  .seg button.on { background: var(--accent); color: #fff; }
+
+  /* visão de mês */
+  .month { display: flex; flex-direction: column; gap: 0.3rem; }
+  .month-head { display: flex; align-items: center; justify-content: center; gap: 1rem; }
+  .month-title { font-weight: 600; text-transform: capitalize; min-width: 11rem; text-align: center; }
+  .week-days {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.3rem;
+    font-size: 0.7rem; color: var(--muted); text-transform: uppercase; text-align: center;
+  }
+  .week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.3rem; }
+  .cell {
+    min-height: 4.2rem; background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.25rem; display: flex; flex-direction: column; gap: 0.15rem;
+    overflow: hidden;
+  }
+  .cell.out { opacity: 0.4; }
+  .cell.today { border-color: var(--accent); }
+  .cell-day { font-size: 0.72rem; color: var(--muted); }
+  .cell.today .cell-day { color: var(--accent); font-weight: 700; }
+  .cell-events { display: flex; flex-direction: column; gap: 0.12rem; overflow: hidden; }
+  .pill {
+    text-align: left; border: none; border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text);
+    font: inherit; font-size: 0.68rem; padding: 0.05rem 0.25rem; border-radius: 3px;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .more { font-size: 0.65rem; color: var(--muted); }
+
   select {
     padding: 0.35em 0.5em; border-radius: 7px; border: 1px solid var(--border);
     font: inherit; background: var(--bg); color: var(--text);

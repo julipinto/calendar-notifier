@@ -283,33 +283,51 @@ pub fn set_calendar_selected(
 
 // ---------- Fase 3: configurações e notificações ----------
 
-/// Antecedência global das notificações (minutos antes do evento).
+// ---------- avisos (múltiplos, minutos antes) ----------
+
+fn parse_minutes_csv(s: &str) -> Vec<i64> {
+    let mut v: Vec<i64> = s
+        .split(',')
+        .filter_map(|x| x.trim().parse::<i64>().ok())
+        .map(|m| m.clamp(0, 1440))
+        .collect();
+    v.sort_unstable_by(|a, b| b.cmp(a)); // maiores antes (10, depois 2…)
+    v.dedup();
+    v
+}
+
+/// Avisos globais (lista de minutos antes do evento). Ex.: [10, 2].
 #[tauri::command]
-pub fn get_lead_minutes() -> Result<i64, String> {
-    store::get_setting("lead_minutes", scheduler::DEFAULT_LEAD)
-        .map_err(|e| e.to_string())?
-        .parse()
-        .map_err(|_| "valor de antecedência inválido".to_string())
+pub fn get_reminders() -> Result<Vec<i64>, String> {
+    let s = store::get_setting("lead_minutes", scheduler::DEFAULT_LEAD).map_err(|e| e.to_string())?;
+    let v = parse_minutes_csv(&s);
+    Ok(if v.is_empty() { vec![10] } else { v })
 }
 
 #[tauri::command]
-pub fn set_lead_minutes(minutes: i64) -> Result<(), String> {
-    let m = minutes.clamp(0, 1440);
-    store::set_setting("lead_minutes", &m.to_string()).map_err(|e| e.to_string())
+pub fn set_reminders(minutes: Vec<i64>) -> Result<(), String> {
+    let v = if minutes.is_empty() { vec![10] } else { minutes };
+    let clamped: Vec<String> = v.iter().map(|m| (*m).clamp(0, 1440).to_string()).collect();
+    store::set_setting("lead_minutes", &clamped.join(",")).map_err(|e| e.to_string())
 }
 
-/// Antecedência específica de uma conta (None = herda a global).
+/// Avisos específicos de uma conta (None/vazio = herda os globais).
 #[tauri::command]
-pub fn get_account_lead(email: String) -> Result<Option<i64>, String> {
-    let v = store::get_setting(&format!("lead:{email}"), "").map_err(|e| e.to_string())?;
-    Ok(if v.is_empty() { None } else { v.parse().ok() })
+pub fn get_account_reminders(email: String) -> Result<Option<Vec<i64>>, String> {
+    let s = store::get_setting(&format!("lead:{email}"), "").map_err(|e| e.to_string())?;
+    let v = parse_minutes_csv(&s);
+    Ok(if v.is_empty() { None } else { Some(v) })
 }
 
 #[tauri::command]
-pub fn set_account_lead(email: String, minutes: Option<i64>) -> Result<(), String> {
+pub fn set_account_reminders(email: String, minutes: Option<Vec<i64>>) -> Result<(), String> {
     let val = match minutes {
-        Some(m) => m.clamp(0, 1440).to_string(),
-        None => String::new(), // vazio = herda a global
+        Some(m) if !m.is_empty() => m
+            .iter()
+            .map(|x| (*x).clamp(0, 1440).to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => String::new(), // vazio = herda os globais
     };
     store::set_setting(&format!("lead:{email}"), &val).map_err(|e| e.to_string())
 }
@@ -388,6 +406,7 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
                     all_day: e.all_day,
                     status: e.status,
                     html_link: e.html_link,
+                    declined: e.declined,
                 })
                 .collect();
             total += mapped.len() as u32;
@@ -432,8 +451,64 @@ pub fn set_poll_minutes(minutes: i64) -> Result<(), String> {
     store::set_setting("poll_minutes", &m.to_string()).map_err(|e| e.to_string())
 }
 
-/// Próximos eventos (para exibir na UI).
+/// Próximos eventos (para exibir na UI), aplicando os filtros configurados.
 #[tauri::command]
 pub fn list_events() -> Result<Vec<store::UpcomingEvent>, String> {
-    store::upcoming_events(100).map_err(|e| e.to_string())
+    let ignore_declined = pref_bool("ignore_declined", true);
+    let ignore_all_day = pref_bool("ignore_all_day", false);
+    let evs = store::upcoming_events(500).map_err(|e| e.to_string())?;
+    Ok(evs
+        .into_iter()
+        .filter(|e| !(ignore_declined && e.declined))
+        .filter(|e| !(ignore_all_day && e.all_day))
+        .take(200)
+        .collect())
+}
+
+// ---------- preferências (bool) ----------
+
+fn pref_bool(key: &str, default: bool) -> bool {
+    store::get_setting(key, if default { "true" } else { "false" })
+        .map(|v| v != "false")
+        .unwrap_or(default)
+}
+
+#[tauri::command]
+pub fn get_ignore_declined() -> Result<bool, String> {
+    Ok(pref_bool("ignore_declined", true))
+}
+#[tauri::command]
+pub fn set_ignore_declined(enabled: bool) -> Result<(), String> {
+    store::set_setting("ignore_declined", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn get_ignore_all_day() -> Result<bool, String> {
+    Ok(pref_bool("ignore_all_day", false))
+}
+#[tauri::command]
+pub fn set_ignore_all_day(enabled: bool) -> Result<(), String> {
+    store::set_setting("ignore_all_day", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn get_start_minimized() -> Result<bool, String> {
+    Ok(pref_bool("start_minimized", true))
+}
+#[tauri::command]
+pub fn set_start_minimized(enabled: bool) -> Result<(), String> {
+    store::set_setting("start_minimized", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_minutes_csv;
+
+    #[test]
+    fn csv_sorted_dedup_clamped() {
+        assert_eq!(parse_minutes_csv("2,10,10"), vec![10, 2]);
+        assert_eq!(parse_minutes_csv("99999"), vec![1440]);
+        assert_eq!(parse_minutes_csv(""), Vec::<i64>::new());
+    }
 }

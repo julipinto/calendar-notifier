@@ -49,6 +49,8 @@ pub fn init() -> Result<()> {
             status        TEXT,
             html_link     TEXT,
             notified      INTEGER NOT NULL DEFAULT 0,
+            declined      INTEGER NOT NULL DEFAULT 0,
+            notified_leads TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (account_email, calendar_id, id)
         );
         CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_ts);
@@ -68,6 +70,14 @@ pub fn init() -> Result<()> {
     );
     let _ = c.execute(
         "ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = c.execute(
+        "ALTER TABLE events ADD COLUMN declined INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = c.execute(
+        "ALTER TABLE events ADD COLUMN notified_leads TEXT NOT NULL DEFAULT ''",
         [],
     );
     Ok(())
@@ -255,6 +265,7 @@ pub struct Event {
     pub all_day: bool,
     pub status: String,
     pub html_link: String,
+    pub declined: bool,
 }
 
 /// Sincroniza os eventos de um calendário: faz upsert dos recém-buscados
@@ -267,16 +278,17 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
     {
         let mut up = tx.prepare(
             "INSERT INTO events
-             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link, notified)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
+             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link, declined, notified_leads)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')
              ON CONFLICT(account_email, calendar_id, id) DO UPDATE SET
                 title = excluded.title,
                 end_ts = excluded.end_ts,
                 all_day = excluded.all_day,
                 status = excluded.status,
                 html_link = excluded.html_link,
-                -- se o horário de início mudou, volta a poder notificar
-                notified = CASE WHEN events.start_ts != excluded.start_ts THEN 0 ELSE events.notified END,
+                declined = excluded.declined,
+                -- se o horário de início mudou, zera os avisos já disparados
+                notified_leads = CASE WHEN events.start_ts != excluded.start_ts THEN '' ELSE events.notified_leads END,
                 start_ts = excluded.start_ts",
         )?;
         for e in events {
@@ -290,6 +302,7 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
                 e.all_day as i64,
                 e.status,
                 e.html_link,
+                e.declined as i64,
             ])?;
         }
         // remove eventos que não vieram nesta sincronização
@@ -322,7 +335,7 @@ pub fn delete_events_for_calendar(account_email: &str, calendar_id: &str) -> Res
     Ok(())
 }
 
-/// Evento pronto para notificar.
+/// Evento candidato a notificar (com os avisos já disparados e se é recusado).
 #[derive(Clone)]
 pub struct DueEvent {
     pub account_email: String,
@@ -330,10 +343,12 @@ pub struct DueEvent {
     pub id: String,
     pub title: String,
     pub start_ts: i64,
+    pub notified_leads: String,
+    pub declined: bool,
 }
 
-/// Eventos futuros (não dia-inteiro, ainda não notificados). A janela de aviso
-/// (por conta) é aplicada pelo scheduler, que sabe a antecedência de cada conta.
+/// Eventos futuros (não dia-inteiro). O scheduler aplica a antecedência por
+/// conta e cada aviso (lead) já disparado está em `notified_leads`.
 pub fn pending_notifications() -> Result<Vec<DueEvent>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -341,9 +356,9 @@ pub fn pending_notifications() -> Result<Vec<DueEvent>> {
         .as_secs() as i64;
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT account_email, calendar_id, id, title, start_ts
+        "SELECT account_email, calendar_id, id, title, start_ts, notified_leads, declined
          FROM events
-         WHERE all_day = 0 AND notified = 0 AND start_ts > ?1
+         WHERE all_day = 0 AND start_ts > ?1
          ORDER BY start_ts",
     )?;
     let rows = stmt
@@ -354,18 +369,27 @@ pub fn pending_notifications() -> Result<Vec<DueEvent>> {
                 id: r.get(2)?,
                 title: r.get(3)?,
                 start_ts: r.get(4)?,
+                notified_leads: r.get(5)?,
+                declined: r.get::<_, i64>(6)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
-pub fn mark_notified(account_email: &str, calendar_id: &str, id: &str) -> Result<()> {
+/// Registra que o aviso de `lead_minutes` já foi disparado para este evento.
+pub fn add_notified_lead(
+    account_email: &str,
+    calendar_id: &str,
+    id: &str,
+    lead_minutes: i64,
+) -> Result<()> {
     let c = conn()?;
     c.execute(
-        "UPDATE events SET notified = 1
+        "UPDATE events SET notified_leads =
+           CASE WHEN notified_leads = '' THEN ?4 ELSE notified_leads || ',' || ?4 END
          WHERE account_email = ?1 AND calendar_id = ?2 AND id = ?3",
-        rusqlite::params![account_email, calendar_id, id],
+        rusqlite::params![account_email, calendar_id, id, lead_minutes.to_string()],
     )?;
     Ok(())
 }
@@ -382,6 +406,7 @@ pub struct UpcomingEvent {
     pub html_link: String,
     pub color: String,
     pub calendar_summary: String,
+    pub declined: bool,
 }
 
 /// Próximos eventos (a partir de agora), ordenados por início, com a cor/nome
@@ -394,7 +419,7 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
     let c = conn()?;
     let mut stmt = c.prepare(
         "SELECT e.id, e.account_email, e.title, e.start_ts, e.end_ts, e.all_day,
-                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, '')
+                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined
          FROM events e
          LEFT JOIN calendars c
            ON c.account_email = e.account_email AND c.id = e.calendar_id
@@ -413,6 +438,7 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
                 html_link: r.get(6)?,
                 color: r.get(7)?,
                 calendar_summary: r.get(8)?,
+                declined: r.get::<_, i64>(9)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
