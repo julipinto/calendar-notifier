@@ -471,3 +471,34 @@ pub fn events_in_range(from: i64, to: i64) -> Result<Vec<SummaryItem>> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
+
+/// Todos os eventos em cache (passados + futuros), ordenados por início, com
+/// cor/nome do calendário. Usado pela visão de mês (a lista filtra o futuro).
+pub fn all_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT e.id, e.account_email, e.title, e.start_ts, e.end_ts, e.all_day,
+                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined
+         FROM events e
+         LEFT JOIN calendars c
+           ON c.account_email = e.account_email AND c.id = e.calendar_id
+         ORDER BY e.start_ts LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![limit], |r| {
+            Ok(UpcomingEvent {
+                id: r.get(0)?,
+                account_email: r.get(1)?,
+                title: r.get(2)?,
+                start_ts: r.get(3)?,
+                end_ts: r.get(4)?,
+                all_day: r.get::<_, i64>(5)? != 0,
+                html_link: r.get(6)?,
+                color: r.get(7)?,
+                calendar_summary: r.get(8)?,
+                declined: r.get::<_, i64>(9)? != 0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}

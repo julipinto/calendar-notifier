@@ -297,10 +297,14 @@
     return q ? events.filter((e) => e.title.toLowerCase().includes(q)) : events;
   });
 
+  // LISTA: só eventos futuros (esconde os que já passaram). nowTick força refresh.
   const groups = $derived.by(() => {
+    nowTick;
+    const nowSec = Date.now() / 1000;
     const out: { key: string; label: string; items: CalEvent[] }[] = [];
     let cur: { key: string; label: string; items: CalEvent[] } | null = null;
     for (const e of visibleEvents) {
+      if (e.start_ts < nowSec) continue; // passados só aparecem no mês
       const { key, label } = dayInfo(e);
       if (!cur || cur.key !== key) {
         cur = { key, label, items: [] };
@@ -472,6 +476,7 @@
                     {#each cell.items.slice(0, 3) as ev (ev.account_email + ev.id)}
                       <button
                         class="pill"
+                        class:past={!ev.all_day && ev.start_ts * 1000 < Date.now()}
                         style="border-left-color:{dotColor(ev.color)}"
                         title={ev.title}
                         onclick={() => ev.html_link && openUrl(ev.html_link)}
@@ -899,6 +904,7 @@
     font: inherit; font-size: 0.68rem; padding: 0.05rem 0.25rem; border-radius: 3px;
     cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .pill.past { opacity: 0.45; }
   .more { font-size: 0.65rem; color: var(--muted); }
 
   select, input[type="time"] {

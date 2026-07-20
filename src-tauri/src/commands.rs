@@ -70,11 +70,13 @@ async fn sync_calendars_for(email: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Janela deslizante: de agora até +30 dias, em RFC3339.
-fn window_30d() -> (String, String) {
+/// Janela de sincronização: de 30 dias atrás até +30 dias, em RFC3339.
+/// (o passado alimenta a visão de mês; a lista/notificações usam só o futuro)
+fn sync_window() -> (String, String) {
     let now = chrono::Utc::now();
-    let max = now + chrono::Duration::days(30);
-    (now.to_rfc3339(), max.to_rfc3339())
+    let from = now - chrono::Duration::days(30);
+    let to = now + chrono::Duration::days(30);
+    (from.to_rfc3339(), to.to_rfc3339())
 }
 
 #[derive(Serialize, Clone)]
@@ -388,7 +390,7 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
         by_acct.entry(c.account_email.clone()).or_default().push(c);
     }
 
-    let (tmin, tmax) = window_30d();
+    let (tmin, tmax) = sync_window();
     let mut total = 0u32;
     for (email, cals) in by_acct {
         let at = access_token_for(&email).await?;
@@ -453,17 +455,17 @@ pub fn set_poll_minutes(minutes: i64) -> Result<(), String> {
     store::set_setting("poll_minutes", &m.to_string()).map_err(|e| e.to_string())
 }
 
-/// Próximos eventos (para exibir na UI), aplicando os filtros configurados.
+/// Eventos em cache (passados + futuros, janela de ±30d), com os filtros.
+/// A lista mostra só os futuros; a visão de mês usa todos (filtro no front).
 #[tauri::command]
 pub fn list_events() -> Result<Vec<store::UpcomingEvent>, String> {
     let ignore_declined = pref_bool("ignore_declined", true);
     let ignore_all_day = pref_bool("ignore_all_day", false);
-    let evs = store::upcoming_events(500).map_err(|e| e.to_string())?;
+    let evs = store::all_events(2000).map_err(|e| e.to_string())?;
     Ok(evs
         .into_iter()
         .filter(|e| !(ignore_declined && e.declined))
         .filter(|e| !(ignore_all_day && e.all_day))
-        .take(200)
         .collect())
 }
 
