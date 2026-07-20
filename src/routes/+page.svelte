@@ -142,13 +142,19 @@
     await invoke("set_start_minimized", { enabled: startMinimized });
     status = startMinimized ? "Vai iniciar em segundo plano." : "Vai abrir a janela ao iniciar.";
   }
-  async function checkForUpdate() {
+  async function checkForUpdate(manual = false) {
+    if (manual) status = "Procurando atualização…";
     try {
       const u = await checkUpdate();
-      if (u) update = u as any;
+      if (u) {
+        update = u as any;
+        if (manual) status = `Atualização ${u.version} disponível.`;
+      } else if (manual) {
+        status = "Você já está na versão mais recente.";
+      }
     } catch (e) {
-      // sem rede / sem release / dev → ignora silenciosamente
-      console.warn("update check falhou:", e);
+      if (manual) status = `Erro ao buscar atualização: ${e}`;
+      else console.warn("update check falhou:", e);
     }
   }
   async function applyUpdate() {
@@ -725,6 +731,9 @@
             <input type="checkbox" bind:checked={startMinimized} onchange={saveStartMinimized} />
             <span>Iniciar em segundo plano (sem abrir a janela)</span>
           </label>
+
+          <h4 class="sub-h">Atualizações</h4>
+          <button class="btn ghost sm" onclick={() => checkForUpdate(true)}>Buscar atualização</button>
         </div>
       </section>
 
