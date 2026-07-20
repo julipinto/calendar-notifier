@@ -52,12 +52,9 @@
 
   const ACCENT = "#6366f1";
 
-  // "10, 2" → [10, 2]
+  // "10, 2" / "10 2" / "10;2" → [10, 2] (aceita qualquer separador)
   function parseMins(text: string): number[] {
-    return text
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n));
+    return (text.match(/\d+/g) ?? []).map(Number);
   }
 
   async function loadAccounts() {

@@ -286,9 +286,11 @@ pub fn set_calendar_selected(
 // ---------- avisos (múltiplos, minutos antes) ----------
 
 fn parse_minutes_csv(s: &str) -> Vec<i64> {
+    // aceita qualquer separador (vírgula, espaço, etc.) — extrai os números
     let mut v: Vec<i64> = s
-        .split(',')
-        .filter_map(|x| x.trim().parse::<i64>().ok())
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|x| !x.is_empty())
+        .filter_map(|x| x.parse::<i64>().ok())
         .map(|m| m.clamp(0, 1440))
         .collect();
     v.sort_unstable_by(|a, b| b.cmp(a)); // maiores antes (10, depois 2…)

@@ -55,11 +55,13 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
-/// Interpreta uma lista de minutos "10,2" → [10, 2] (ordenada desc, sem dup).
+/// Interpreta uma lista de minutos "10,2" / "10 2" → [10, 2] (desc, sem dup).
+/// Aceita qualquer separador (extrai os números).
 pub fn parse_reminders(s: &str) -> Vec<i64> {
     let mut v: Vec<i64> = s
-        .split(',')
-        .filter_map(|x| x.trim().parse::<i64>().ok())
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|x| !x.is_empty())
+        .filter_map(|x| x.parse::<i64>().ok())
         .collect();
     v.sort_unstable_by(|a, b| b.cmp(a));
     v.dedup();
