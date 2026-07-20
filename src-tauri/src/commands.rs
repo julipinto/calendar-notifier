@@ -39,9 +39,14 @@ pub(crate) fn friendly_err(e: &anyhow::Error) -> String {
 /// falhar por motivo que não seja rede, marca a conta como "precisa reconectar".
 async fn access_token_for(email: &str) -> Result<String, String> {
     let creds = config::client_creds();
-    let rt = secrets::get_refresh_token(email)
-        .map_err(|e| e.to_string())?
-        .ok_or("conta sem refresh token — reconecte")?;
+    let rt = match secrets::get_refresh_token(email).map_err(|e| e.to_string())? {
+        Some(t) => t,
+        None => {
+            // sem token guardado (ex.: conectou numa versão antiga) → precisa reconectar
+            let _ = store::set_account_reauth(email, true);
+            return Err(format!("A conta {email} precisa reconectar (sem autorização salva)."));
+        }
+    };
     match auth::refresh_access_token(&creds, &rt).await {
         Ok((at, _)) => {
             let _ = store::set_account_reauth(email, false);
@@ -397,29 +402,40 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
 
     let (tmin, tmax) = sync_window();
     let mut total = 0u32;
+    let mut last_err: Option<String> = None;
     for (email, cals) in by_acct {
-        let at = access_token_for(&email).await?;
+        // uma conta com problema (sem token/expirada) não deve travar as outras
+        let at = match access_token_for(&email).await {
+            Ok(at) => at,
+            Err(e) => {
+                eprintln!("[sync] conta {email} pulada: {e}");
+                last_err = Some(e);
+                continue;
+            }
+        };
         for c in cals {
-            let evs = google::fetch_events(&at, &c.id, &tmin, &tmax)
-                .await
-                .map_err(|e| friendly_err(&e))?;
-            let mapped: Vec<store::Event> = evs
-                .into_iter()
-                .map(|e| store::Event {
-                    id: e.id,
-                    calendar_id: c.id.clone(),
-                    account_email: email.clone(),
-                    title: e.title,
-                    start_ts: e.start_ts,
-                    end_ts: e.end_ts,
-                    all_day: e.all_day,
-                    status: e.status,
-                    html_link: e.html_link,
-                    declined: e.declined,
-                })
-                .collect();
-            total += mapped.len() as u32;
-            store::replace_events(&email, &c.id, &mapped).map_err(|e| e.to_string())?;
+            match google::fetch_events(&at, &c.id, &tmin, &tmax).await {
+                Ok(evs) => {
+                    let mapped: Vec<store::Event> = evs
+                        .into_iter()
+                        .map(|e| store::Event {
+                            id: e.id,
+                            calendar_id: c.id.clone(),
+                            account_email: email.clone(),
+                            title: e.title,
+                            start_ts: e.start_ts,
+                            end_ts: e.end_ts,
+                            all_day: e.all_day,
+                            status: e.status,
+                            html_link: e.html_link,
+                            declined: e.declined,
+                        })
+                        .collect();
+                    total += mapped.len() as u32;
+                    store::replace_events(&email, &c.id, &mapped).map_err(|e| e.to_string())?;
+                }
+                Err(e) => last_err = Some(friendly_err(&e)),
+            }
         }
     }
     let now = std::time::SystemTime::now()
@@ -427,6 +443,12 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
         .unwrap_or_default()
         .as_secs();
     let _ = store::set_setting("last_sync_ts", &now.to_string());
+    // se NADA sincronizou e houve erro, propaga (ex.: todas as contas precisam reconectar)
+    if total == 0 {
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+    }
     Ok(total)
 }
 
