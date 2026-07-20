@@ -698,16 +698,24 @@
 </div>
 
 <style>
-  :global(body) { margin: 0; }
-  :global(html, body) { height: 100%; }
-
-  .app {
+  /* tema no :root e fundo sólido no body — evita transparência (desktop
+     aparecendo atrás) em WMs do Linux onde o WebView é transparente */
+  :global(:root) {
     --accent: #6366f1;
     --bg: #f5f5f7;
     --card: #ffffff;
     --text: #1a1a1e;
     --muted: #71717a;
     --border: #ececf0;
+  }
+  :global(html, body) {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .app {
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
     color: var(--text);
     background: var(--bg);
@@ -933,7 +941,7 @@
   .status.err { background: color-mix(in srgb, #e0483d 12%, transparent); }
 
   @media (prefers-color-scheme: dark) {
-    .app {
+    :global(:root) {
       --bg: #17171b; --card: #232329; --text: #ececf0; --muted: #9b9ba4; --border: #33333c;
     }
   }

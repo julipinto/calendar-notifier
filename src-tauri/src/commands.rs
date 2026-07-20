@@ -348,7 +348,7 @@ pub fn test_notification(app: AppHandle) -> Result<(), String> {
         .title("Calendar Notifier")
         .body("Notificação de teste ✓");
     if sound_on {
-        b = b.sound("Default");
+        b = b.sound(scheduler::NOTIF_SOUND);
     }
     b.show().map_err(|e| e.to_string())
 }

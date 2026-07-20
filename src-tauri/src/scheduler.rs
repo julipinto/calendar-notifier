@@ -9,6 +9,14 @@ use crate::store;
 
 const TICK: Duration = Duration::from_secs(30);
 pub const DEFAULT_LEAD: &str = "10";
+
+// nome do som da notificação por plataforma:
+// - Windows/macOS: "Default" (som padrão do SO)
+// - Linux: nome do freedesktop sound theme (o "Default" não existe lá)
+#[cfg(target_os = "linux")]
+pub const NOTIF_SOUND: &str = "message-new-instant";
+#[cfg(not(target_os = "linux"))]
+pub const NOTIF_SOUND: &str = "Default";
 pub const DEFAULT_POLL: &str = "60";
 pub const DEFAULT_SUMMARY_TIME: &str = "08:00";
 
@@ -121,7 +129,7 @@ fn tick(app: &AppHandle) -> anyhow::Result<()> {
             };
             let mut b = app.notification().builder().title(&ev.title).body(&body);
             if sound_on {
-                b = b.sound("Default");
+                b = b.sound(NOTIF_SOUND);
             }
             let _ = b.show();
             store::add_notified_lead(&ev.account_email, &ev.calendar_id, &ev.id, lead)?;
@@ -217,7 +225,7 @@ fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
     let title = format!("Resumo de hoje — {} evento(s)", items.len());
     let mut b = app.notification().builder().title(&title).body(&lines.join("\n"));
     if sound_on {
-        b = b.sound("Default");
+        b = b.sound(NOTIF_SOUND);
     }
     let _ = b.show();
     Ok(())
