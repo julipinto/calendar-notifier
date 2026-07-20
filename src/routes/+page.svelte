@@ -27,7 +27,7 @@
 
   let accounts = $state<Account[]>([]);
   let calendars = $state<Record<string, Calendar[]>>({});
-  let accountReminders = $state<Record<string, string>>({});
+  let accountReminders = $state<Record<string, number[]>>({});
   let expanded = $state<Record<string, boolean>>({});
   let events = $state<CalEvent[]>([]);
   let busy = $state(false);
@@ -37,7 +37,7 @@
   let lastSync = $state(0);
   let authUrl = $state("");
   let manualUrl = $state("");
-  let remindersText = $state("10");
+  let reminders = $state<number[]>([10]);
   let ignoreDeclined = $state(true);
   let ignoreAllDay = $state(false);
   let startMinimized = $state(true);
@@ -52,23 +52,26 @@
 
   const ACCENT = "#6366f1";
 
-  // "10, 2" / "10 2" / "10;2" → [10, 2] (aceita qualquer separador)
-  function parseMins(text: string): number[] {
-    return (text.match(/\d+/g) ?? []).map(Number);
-  }
-
   async function loadAccounts() {
     accounts = await invoke<Account[]>("list_accounts");
     for (const a of accounts) {
       await loadCalendars(a.email);
       const r = await invoke<number[] | null>("get_account_reminders", { email: a.email });
-      accountReminders[a.email] = r ? r.join(", ") : "";
+      accountReminders[a.email] = r ?? [];
     }
   }
 
   async function saveAccountReminders(email: string) {
-    const mins = parseMins(accountReminders[email] ?? "");
+    const mins = (accountReminders[email] ?? []).map(Number).filter((n) => !isNaN(n));
     await invoke("set_account_reminders", { email, minutes: mins.length ? mins : null });
+  }
+  function addAccountReminder(email: string) {
+    accountReminders[email] = [...(accountReminders[email] ?? []), 5];
+    saveAccountReminders(email);
+  }
+  function removeAccountReminder(email: string, i: number) {
+    accountReminders[email] = (accountReminders[email] ?? []).filter((_, j) => j !== i);
+    saveAccountReminders(email);
   }
   async function loadCalendars(email: string) {
     calendars[email] = await invoke<Calendar[]>("account_calendars", { email });
@@ -81,13 +84,19 @@
     events = await invoke<CalEvent[]>("list_events");
   }
   async function loadReminders() {
-    const r = await invoke<number[]>("get_reminders");
-    remindersText = r.join(", ");
+    reminders = await invoke<number[]>("get_reminders");
   }
   async function saveReminders() {
-    const mins = parseMins(remindersText);
+    const mins = reminders.map(Number).filter((n) => !isNaN(n));
     await invoke("set_reminders", { minutes: mins.length ? mins : [10] });
-    status = `Avisos: ${(mins.length ? mins : [10]).join(", ")} min antes.`;
+  }
+  function addReminder() {
+    reminders = [...reminders, 5];
+    saveReminders();
+  }
+  function removeReminder(i: number) {
+    reminders = reminders.filter((_, j) => j !== i);
+    saveReminders();
   }
   async function loadPoll() {
     const v = await invoke<number>("get_poll_minutes");
@@ -549,15 +558,26 @@
               {#if expanded[acc.email]}
                 <div class="cals">
                   <div class="acc-lead">
-                    Avisos
-                    <input
-                      type="text"
-                      class="mins"
-                      placeholder={remindersText}
-                      bind:value={accountReminders[acc.email]}
-                      onchange={() => saveAccountReminders(acc.email)}
-                    />
-                    min antes <span class="muted">(vazio = padrão · ex.: 10, 2)</span>
+                    <span>Avisos desta conta:</span>
+                    <div class="chips">
+                      {#each accountReminders[acc.email] ?? [] as _, i}
+                        <span class="chip">
+                          <input
+                            type="number"
+                            min="0"
+                            max="1440"
+                            bind:value={accountReminders[acc.email][i]}
+                            onchange={() => saveAccountReminders(acc.email)}
+                          />
+                          <span class="unit">min</span>
+                          <button class="x" title="Remover" onclick={() => removeAccountReminder(acc.email, i)}>×</button>
+                        </span>
+                      {/each}
+                      <button class="add" onclick={() => addAccountReminder(acc.email)}>+ aviso</button>
+                    </div>
+                    {#if (accountReminders[acc.email] ?? []).length === 0}
+                      <span class="muted small">vazio = usa os globais ({reminders.join(", ")} min)</span>
+                    {/if}
                   </div>
                   {#each calendars[acc.email] ?? [] as cal (cal.id)}
                     <label class="cal">
@@ -580,11 +600,22 @@
       <section class="card">
         <div class="card-head"><h3>Notificações & Sincronização</h3></div>
         <div class="settings">
-          <div class="set-row">
-            <span>Avisar</span>
-            <input class="mins" type="text" bind:value={remindersText} onchange={saveReminders} />
-            <span>min antes <span class="muted">(vários: ex. 10, 2)</span></span>
+          <div class="set-row reminders">
+            <span>Avisar antes</span>
+            <div class="chips">
+              {#each reminders as _, i}
+                <span class="chip">
+                  <input type="number" min="0" max="1440" bind:value={reminders[i]} onchange={saveReminders} />
+                  <span class="unit">min</span>
+                  {#if reminders.length > 1}
+                    <button class="x" title="Remover aviso" onclick={() => removeReminder(i)}>×</button>
+                  {/if}
+                </span>
+              {/each}
+              <button class="add" onclick={addReminder}>+ aviso</button>
+            </div>
           </div>
+          <p class="muted small">Cada valor é um toque separado antes do evento (ex.: 10 e 2 min).</p>
           <label class="set-row check">
             <input type="checkbox" bind:checked={soundEnabled} onchange={saveSound} />
             <span>Tocar som na notificação</span>
@@ -776,10 +807,28 @@
     width: 3.5rem; padding: 0.3em 0.4em; border-radius: 7px; border: 1px solid var(--border);
     font: inherit; text-align: center; background: var(--bg); color: var(--text);
   }
-  .mins {
-    width: 5rem; padding: 0.3em 0.5em; border-radius: 7px; border: 1px solid var(--border);
-    font: inherit; text-align: center; background: var(--bg); color: var(--text);
+  .reminders { align-items: flex-start; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.2rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.15rem 0.3rem 0.15rem 0.4rem;
   }
+  .chip input {
+    width: 3rem; border: none; background: transparent; color: var(--text);
+    font: inherit; text-align: right; padding: 0.15em 0;
+  }
+  .chip .unit { font-size: 0.8em; color: var(--muted); }
+  .chip .x {
+    border: none; background: transparent; color: var(--muted); cursor: pointer;
+    font-size: 1rem; line-height: 1; padding: 0 0.15rem; border-radius: 4px;
+  }
+  .chip .x:hover { color: #e0483d; }
+  .chips .add {
+    border: 1px dashed var(--border); background: transparent; color: var(--accent);
+    border-radius: 8px; padding: 0.25rem 0.5rem; font: inherit; font-size: 0.82rem; cursor: pointer;
+  }
+  .chips .add:hover { border-color: var(--accent); }
   .sub-h { margin: 0.6rem 0 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 
   /* barra de eventos: busca + toggle lista/mês */
