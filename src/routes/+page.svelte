@@ -323,6 +323,12 @@
   function dotColor(c: string): string {
     return c && c.startsWith("#") ? c : ACCENT;
   }
+  // abre o evento na CONTA certa (authuser evita o Google redirecionar p/ a conta logada)
+  function openEvent(e: CalEvent) {
+    if (!e.html_link) return;
+    const sep = e.html_link.includes("?") ? "&" : "?";
+    openUrl(`${e.html_link}${sep}authuser=${encodeURIComponent(e.account_email)}`);
+  }
 
   // eventos após a busca (filtra por título)
   const visibleEvents = $derived.by(() => {
@@ -523,7 +529,7 @@
                         class:past={!ev.all_day && ev.start_ts * 1000 < Date.now()}
                         style="border-left-color:{dotColor(ev.color)}"
                         title={ev.title}
-                        onclick={() => ev.html_link && openUrl(ev.html_link)}
+                        onclick={() => openEvent(ev)}
                       >{ev.all_day ? "" : fmtTime(ev) + " "}{ev.title}</button>
                     {/each}
                     {#if cell.items.length > 3}<span class="more">+{cell.items.length - 3}</span>{/if}
@@ -548,7 +554,7 @@
             {#each g.items as ev (ev.account_email + ev.id)}
               <button
                 class="event"
-                onclick={() => ev.html_link && openUrl(ev.html_link)}
+                onclick={() => openEvent(ev)}
                 title={ev.calendar_summary}
               >
                 <span class="time">{fmtTime(ev)}</span>
