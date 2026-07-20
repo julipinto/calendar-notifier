@@ -183,6 +183,16 @@ calendar-notifier/
 - ✅ **UI de avisos** como lista de campos (+ aviso / ×) em vez de texto.
 - ✅ **Resumo diário** opcional: no horário configurado, notifica a agenda do
   dia (todos os tipos); só dispara se houver eventos; 1x/dia (`daily_summary_*`).
+- ✅ **Calendário mostra passados** (sync -30d..+30d); lista só futuros.
+- ✅ **Fixes Linux (Fernando):** fundo sólido no `body` (transparência) e
+  `color-scheme`/`accent-color`/scrollbars p/ controles nativos no tema;
+  som freedesktop (`message-new-instant`) em vez de "Default".
+- ✅ **Otimização:** `[profile.release]` (opt=s, lto, strip, panic=abort) →
+  binário 23M→7.3M. **Memória em background:** fechar a janela agora a
+  **destrói** (libera o WebKitGTK); só o núcleo Rust + tray seguem vivos;
+  reabrir pelo tray recria a janela. App segue vivo via `RunEvent::ExitRequested`.
+  > Nota: ~51 MB com a janela aberta é o piso do WebKitGTK (normal). Os "5 MB"
+  > do Windows não contam os processos do WebView2.
 - **Assinatura de código (Windows):** SmartScreen bloqueia o app não assinado.
   Fix real: certificado (EV) + assinar `.msi`/`.exe` no CI. TODO.
 - **Ações na notificação (adiar/abrir no clique):** o plugin do Tauri **não**

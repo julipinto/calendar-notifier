@@ -44,11 +44,23 @@ pub fn update_tray(app: &AppHandle) {
     }
 }
 
-/// Mostra e foca a janela principal.
+/// Mostra e foca a janela principal. Se ela foi destruída (para liberar memória
+/// em background), recria — o WebView sobe de novo.
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+    } else {
+        match tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+            .title("Calendar Notifier")
+            .inner_size(800.0, 600.0)
+            .build()
+        {
+            Ok(w) => {
+                let _ = w.set_focus();
+            }
+            Err(e) => eprintln!("[tray] falha ao recriar a janela: {e}"),
+        }
     }
 }

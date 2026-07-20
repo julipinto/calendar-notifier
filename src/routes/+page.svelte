@@ -707,6 +707,10 @@
     --text: #1a1a1e;
     --muted: #71717a;
     --border: #ececf0;
+    /* faz o WebKitGTK renderizar controles nativos (select, checkbox, spinners,
+       scrollbars) no esquema certo em vez do tema do GTK do sistema */
+    color-scheme: light dark;
+    accent-color: #6366f1;
   }
   :global(html, body) {
     height: 100%;
@@ -714,6 +718,12 @@
     background: var(--bg);
     color: var(--text);
   }
+  /* scrollbars temáticas */
+  :global(::-webkit-scrollbar) { width: 10px; height: 10px; }
+  :global(::-webkit-scrollbar-thumb) {
+    background: var(--border); border-radius: 6px;
+  }
+  :global(::-webkit-scrollbar-track) { background: transparent; }
 
   .app {
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;

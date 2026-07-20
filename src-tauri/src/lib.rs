@@ -47,13 +47,8 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // fechar a janela esconde na bandeja em vez de encerrar o app
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
-            }
-        })
+        // fechar a janela = destruí-la (libera o WebKit em background). O app
+        // segue vivo na bandeja graças ao ExitRequested tratado no .run() abaixo.
         .invoke_handler(tauri::generate_handler![
             commands::start_auth,
             commands::finish_auth_manual,
@@ -88,6 +83,15 @@ pub fn run() {
             commands::get_daily_summary_time,
             commands::set_daily_summary_time,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Mantém o app vivo na bandeja quando a última janela fecha.
+            // Quando o usuário escolhe "Sair" (app.exit(0)), o code é Some → deixa sair.
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

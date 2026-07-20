@@ -1,6 +1,6 @@
 [package]
 name = "calendar-notifier"
-version = "0.1.9"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -55,3 +55,12 @@ keyring = { version = "3", features = ["apple-native"] }
 [patch.crates-io]
 zbus = { path = "vendor/zbus-5.18.0" }
 
+
+# Perfil de release otimizado para tamanho (reduz o binário; ajuda um pouco a
+# memória). O grosso do RSS no Linux é o WebKitGTK, que não dá pra encolher.
+[profile.release]
+opt-level = "s"     # otimiza para tamanho
+lto = true          # link-time optimization
+codegen-units = 1   # melhor otimização (build mais lento)
+panic = "abort"     # remove o código de unwinding
+strip = true        # remove símbolos de debug
