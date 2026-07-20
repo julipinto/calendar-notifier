@@ -4,6 +4,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import { getVersion } from "@tauri-apps/api/app";
   import { onMount } from "svelte";
 
   type Account = { email: string; display_name: string; needs_reauth: boolean };
@@ -49,6 +50,7 @@
   let eventView = $state<"list" | "month">("list");
   let update = $state<{ version: string; downloadAndInstall: (cb?: any) => Promise<void> } | null>(null);
   let updating = $state(false);
+  let appVersion = $state("");
   let monthCursor = $state(new Date()); // mês exibido na visão de calendário
   let pollMinutes = $state(60);
   let soundEnabled = $state(true);
@@ -414,6 +416,7 @@
     loadFilters();
     loadDailySummary();
     checkForUpdate();
+    getVersion().then((v) => (appVersion = v)).catch(() => {});
     loadAutostart();
     loadLastSync();
     const uns = [
@@ -724,6 +727,8 @@
           </label>
         </div>
       </section>
+
+      <p class="version">Calendar Notifier v{appVersion}</p>
     {/if}
   </div>
 
@@ -978,6 +983,7 @@
 
   .muted { color: var(--muted); }
   .small { font-size: 0.85rem; }
+  .version { text-align: center; font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0; }
   .status {
     flex-shrink: 0; margin: 0; font-size: 0.83rem; padding: 0.5rem 1.1rem;
     border-top: 1px solid var(--border);

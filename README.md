@@ -15,6 +15,8 @@ bandeja e execução em segundo plano. Feito em **Tauri v2** (Rust + Svelte).
 - **Visão de lista e de mês**, busca por título, cores por calendário.
 - **Filtros**: ignorar eventos recusados / de dia inteiro.
 - Tratamento de **offline** e **reconexão** quando o token expira.
+- **Atualização automática** (Windows e AppImage): o app detecta uma nova
+  versão, baixa e instala sozinho — sem precisar baixar manualmente.
 
 ---
 
