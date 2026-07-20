@@ -17,8 +17,38 @@ BIN_DIR="${HOME}/.local/bin"
 DESKTOP_DIR="${HOME}/.local/share/applications"
 ICON_DIR="${HOME}/.local/share/icons"
 
+# Chave pública do updater (mesma do tauri.conf.json). Base64 do arquivo .pub
+# do minisign. Usada para verificar a assinatura .sig de cada release.
+PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhERjE5MUY5NkM2OTZENTMKUldSVGJXbHMrWkh4amNIamo3MlNzWVhKdWYxUkZzc1M5WC9CMk8wbzk2Q0x6K3hrT0ovMEFXeTYK"
+
 err() { printf '\033[31merro:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m::\033[0m %s\n' "$1"; }
+warn() { printf '\033[33maviso:\033[0m %s\n' "$1" >&2; }
+
+# Verifica a assinatura minisign de um arquivo baixado (defesa em profundidade).
+# O .sig do release (formato Tauri) é base64 de uma assinatura minisign normal.
+# Melhor-esforço: se 'minisign' não estiver instalado, avisa e segue — o download
+# já é HTTPS a partir do repo oficial.
+verify_sig() {
+  file="$1"; sig_url="$2"
+  if ! command -v minisign >/dev/null 2>&1; then
+    warn "minisign não encontrado — assinatura NÃO verificada."
+    warn "Para validar, instale 'minisign' (Arch: 'sudo pacman -S minisign', Debian: 'sudo apt install minisign') e rode de novo."
+    return 0
+  fi
+  sig_b64="${tmp}/asset.sig.b64"
+  sig="${tmp}/asset.sig"
+  if ! curl -fsSL --retry 3 "$sig_url" -o "$sig_b64"; then
+    err "não achei o .sig do asset — abortando (não dá pra verificar a assinatura)."
+  fi
+  base64 -d "$sig_b64" > "$sig" 2>/dev/null || err "arquivo .sig inválido."
+  key="$(printf '%s' "$PUBKEY" | base64 -d 2>/dev/null | tail -n1)"
+  [ -n "$key" ] || err "não consegui decodificar a chave pública."
+  info "Verificando assinatura (minisign)..."
+  minisign -V -P "$key" -x "$sig" -m "$file" >/dev/null 2>&1 \
+    || err "assinatura inválida — abortando (arquivo corrompido ou adulterado)."
+  info "Assinatura OK."
+}
 
 # Dependências mínimas.
 command -v curl >/dev/null 2>&1 || err "curl não encontrado."
@@ -30,7 +60,7 @@ arch="$(uname -m)"
 
 api="https://api.github.com/repos/${REPO}/releases/latest"
 info "Buscando último release..."
-json="$(curl -fsSL "$api")" || err "não consegui consultar o GitHub."
+json="$(curl -fsSL --retry 3 "$api")" || err "não consegui consultar o GitHub."
 
 # Extrai a URL de download de um asset pelo sufixo do nome (sem jq).
 asset_url() {
@@ -50,7 +80,8 @@ install_deb() {
   [ -n "$url" ] || err "asset .deb não encontrado no release."
   out="${tmp}/pkg.deb"
   info "Baixando .deb..."
-  curl -fSL --progress-bar "$url" -o "$out"
+  curl -fSL --retry 3 --progress-bar "$url" -o "$out"
+  verify_sig "$out" "${url}.sig"
   info "Instalando (pode pedir sua senha)..."
   if command -v apt >/dev/null 2>&1; then
     sudo apt install -y "$out"
@@ -63,10 +94,18 @@ install_deb() {
 install_appimage() {
   url="$(asset_url '_amd64\.AppImage')"
   [ -n "$url" ] || err "asset .AppImage não encontrado no release."
+
+  # FUSE não é preciso pra extrair, mas é pra ABRIR o AppImage. Avisa antes.
+  if ! ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; then
+    warn "libfuse2 parece ausente — o app não abre sem ela."
+    warn "Instale: Arch 'sudo pacman -S fuse2', Debian/Ubuntu 'sudo apt install libfuse2'."
+  fi
+
   mkdir -p "$BIN_DIR" "$DESKTOP_DIR" "${ICON_DIR}/hicolor"
   target="${BIN_DIR}/calendar-notifier.AppImage"
   info "Baixando AppImage..."
-  curl -fSL --progress-bar "$url" -o "$target"
+  curl -fSL --retry 3 --progress-bar "$url" -o "$target"
+  verify_sig "$target" "${url}.sig"
   chmod +x "$target"
 
   # Extrai o .desktop e os ícones que o próprio Tauri embutiu no AppImage —
@@ -126,7 +165,12 @@ EOF
 
   info "Instalado em: $target"
   info "Aparece no menu/busca como \"${APP_NAME}\" (pode levar alguns segundos)."
-  info "Precisa de FUSE: Arch 'sudo pacman -S fuse2', Debian 'sudo apt install libfuse2'."
+
+  # No terminal só funciona sem caminho absoluto se ~/.local/bin estiver no PATH.
+  case ":${PATH}:" in
+    *":${BIN_DIR}:"*) ;;
+    *) warn "${BIN_DIR} não está no PATH — pelo terminal rode com o caminho completo, ou adicione ao PATH." ;;
+  esac
 }
 
 if command -v dpkg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then

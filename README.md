@@ -31,6 +31,10 @@ AppImage (Arch, Fedora, etc.) com atalho no menu:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/julipinto/calendar-notifier/main/scripts/install.sh | sh
 ```
+> O comando executa um script remoto e usa `sudo` na rota `.deb` (modelo padrão
+> de instaladores como o rustup). Leia o script antes se preferir. Se o
+> [`minisign`](https://jedisct1.github.io/minisign/) estiver instalado, o script
+> verifica a assinatura do binário baixado contra a chave do updater.
 
 ### Windows
 1. Baixe o **`.msi`** (recomendado) ou o **`.exe`**.
