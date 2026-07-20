@@ -13,6 +13,9 @@ client_secret*.json
 *credentials*.json
 *.secret
 tokens.json
+# chave privada do updater (a pública fica embutida no tauri.conf.json)
+updater.key
+updater.key.pub
 # banco local com cache/tokens
 *.db
 *.sqlite

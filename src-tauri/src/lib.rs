@@ -14,6 +14,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_main(app);
         }))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // autostart lança com "--minimized" p/ o app poder iniciar na bandeja
         .plugin(
             tauri_plugin_autostart::Builder::new()

@@ -303,14 +303,19 @@ fn parse_minutes_csv(s: &str) -> Vec<i64> {
 /// Avisos globais (lista de minutos antes do evento). Ex.: [10, 2].
 #[tauri::command]
 pub fn get_reminders() -> Result<Vec<i64>, String> {
-    let s = store::get_setting("lead_minutes", scheduler::DEFAULT_LEAD).map_err(|e| e.to_string())?;
+    let s =
+        store::get_setting("lead_minutes", scheduler::DEFAULT_LEAD).map_err(|e| e.to_string())?;
     let v = parse_minutes_csv(&s);
     Ok(if v.is_empty() { vec![10] } else { v })
 }
 
 #[tauri::command]
 pub fn set_reminders(minutes: Vec<i64>) -> Result<(), String> {
-    let v = if minutes.is_empty() { vec![10] } else { minutes };
+    let v = if minutes.is_empty() {
+        vec![10]
+    } else {
+        minutes
+    };
     let clamped: Vec<String> = v.iter().map(|m| (*m).clamp(0, 1440).to_string()).collect();
     store::set_setting("lead_minutes", &clamped.join(",")).map_err(|e| e.to_string())
 }
@@ -513,8 +518,11 @@ pub fn get_daily_summary_enabled() -> Result<bool, String> {
 }
 #[tauri::command]
 pub fn set_daily_summary_enabled(enabled: bool) -> Result<(), String> {
-    store::set_setting("daily_summary_enabled", if enabled { "true" } else { "false" })
-        .map_err(|e| e.to_string())
+    store::set_setting(
+        "daily_summary_enabled",
+        if enabled { "true" } else { "false" },
+    )
+    .map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub fn get_daily_summary_time() -> Result<String, String> {

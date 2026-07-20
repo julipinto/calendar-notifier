@@ -223,7 +223,11 @@ fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
         lines.push(format!("+{} mais", items.len() - 10));
     }
     let title = format!("Resumo de hoje — {} evento(s)", items.len());
-    let mut b = app.notification().builder().title(&title).body(&lines.join("\n"));
+    let mut b = app
+        .notification()
+        .builder()
+        .title(&title)
+        .body(&lines.join("\n"));
     if sound_on {
         b = b.sound(NOTIF_SOUND);
     }

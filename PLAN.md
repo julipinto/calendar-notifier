@@ -198,7 +198,12 @@ calendar-notifier/
 - **Ações na notificação (adiar/abrir no clique):** o plugin do Tauri **não**
   expõe ações/clique no desktop. Precisa de código custom por plataforma
   (notify-rust/WinRT). **Adiado** (risco de quebrar as notificações). TODO.
-- Auto-update (`tauri-plugin-updater`), builds macOS/Linux. TODO.
+- ✅ **Auto-update** (`tauri-plugin-updater` + `process`): checa a release mais
+  recente no GitHub, baixa e instala sozinho, reinicia. Feed = `latest.json`
+  assinado (chave grátis do `tauri signer`; privada em secret, pública no conf).
+  CI via `tauri-action` (assina + gera latest.json). Funciona em Windows e no
+  AppImage (Linux); `.deb` atualiza por apt/manual.
+- Builds macOS no CI. TODO.
 
 ## Problemas conhecidos (a retomar)
 

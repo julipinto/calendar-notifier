@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+  import { relaunch } from "@tauri-apps/plugin-process";
   import { onMount } from "svelte";
 
   type Account = { email: string; display_name: string; needs_reauth: boolean };
@@ -45,6 +47,8 @@
   let dailySummaryTime = $state("08:00");
   let search = $state("");
   let eventView = $state<"list" | "month">("list");
+  let update = $state<{ version: string; downloadAndInstall: (cb?: any) => Promise<void> } | null>(null);
+  let updating = $state(false);
   let monthCursor = $state(new Date()); // mês exibido na visão de calendário
   let pollMinutes = $state(60);
   let soundEnabled = $state(true);
@@ -135,6 +139,27 @@
   async function saveStartMinimized() {
     await invoke("set_start_minimized", { enabled: startMinimized });
     status = startMinimized ? "Vai iniciar em segundo plano." : "Vai abrir a janela ao iniciar.";
+  }
+  async function checkForUpdate() {
+    try {
+      const u = await checkUpdate();
+      if (u) update = u as any;
+    } catch (e) {
+      // sem rede / sem release / dev → ignora silenciosamente
+      console.warn("update check falhou:", e);
+    }
+  }
+  async function applyUpdate() {
+    if (!update) return;
+    updating = true;
+    status = "Baixando atualização…";
+    try {
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      status = `Erro na atualização: ${e}`;
+      updating = false;
+    }
   }
   async function loadLastSync() {
     try {
@@ -388,6 +413,7 @@
     loadSound();
     loadFilters();
     loadDailySummary();
+    checkForUpdate();
     loadAutostart();
     loadLastSync();
     const uns = [
@@ -446,6 +472,15 @@
       </button>
     </div>
   </header>
+
+  {#if update}
+    <div class="update-bar">
+      <span>✨ Atualização <b>{update.version}</b> disponível.</span>
+      <button class="btn primary sm" onclick={applyUpdate} disabled={updating}>
+        {updating ? "Atualizando…" : "Atualizar e reiniciar"}
+      </button>
+    </div>
+  {/if}
 
   <div class="content">
     {#if view === "events"}
@@ -949,6 +984,12 @@
     background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .status.err { background: color-mix(in srgb, #e0483d 12%, transparent); }
+  .update-bar {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+    gap: 0.75rem; padding: 0.5rem 1.1rem; font-size: 0.85rem;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
 
   @media (prefers-color-scheme: dark) {
     :global(:root) {

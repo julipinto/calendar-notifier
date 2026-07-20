@@ -1,29 +1,51 @@
 name: Build
 
-# Roda manualmente (workflow_dispatch) OU ao dar push numa tag v* (ex: v0.1.3).
-# Em tag: publica os instaladores na aba "Releases". Em run manual: como artifact.
+# Roda manualmente (workflow_dispatch) OU ao dar push numa tag v* (ex: v0.3.0).
+# Usa a tauri-action, que compila, ASSINA os artefatos do updater e gera o
+# latest.json na Release — habilitando o auto-update do app.
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write # necessário para criar/atualizar o Release
+  contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: ubuntu-latest
+            args: "--bundles deb appimage"
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - uses: dtolnay/rust-toolchain@stable
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Dependências do sistema (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf xdg-utils libglib2.0-dev
+
       - name: Instalar dependências do front
         run: npm install
+
       - name: Gravar credenciais do Google
         shell: bash
         run: |
@@ -33,74 +55,19 @@ jobs:
           printf '%s' "$GOOGLE_CLIENT_JSON" > src-tauri/google_client.json
         env:
           GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
-      - name: Build (tauri)
-        run: npm run tauri build
-      - name: Publicar instaladores (artifact)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: calendar-notifier-windows
-          path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
-      - name: Publicar Release (Windows)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
 
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - name: Instalar dependências do sistema (Tauri + AppImage)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            xdg-utils \
-            libglib2.0-dev
-      - name: Instalar dependências do front
-        run: npm install
-      - name: Gravar credenciais do Google
-        run: |
-          if [ -z "$GOOGLE_CLIENT_JSON" ]; then
-            echo "::error::Secret GOOGLE_CLIENT_JSON não configurado."; exit 1
-          fi
-          printf '%s' "$GOOGLE_CLIENT_JSON" > src-tauri/google_client.json
+      - uses: tauri-apps/tauri-action@v0
         env:
-          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
-      - name: Build (tauri — .deb + .AppImage)
-        run: npm run tauri build -- --bundles deb appimage
-      - name: Publicar instaladores (artifact)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # chave do updater (grátis, gerada com `tauri signer generate`)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
-          name: calendar-notifier-linux
-          path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
-          if-no-files-found: error
-      - name: Publicar Release (Linux)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+          tagName: ${{ github.ref_name }}
+          releaseName: "Calendar Notifier ${{ github.ref_name }}"
+          releaseBody: "Baixe o instalador da sua plataforma nos arquivos abaixo."
+          releaseDraft: false
+          # builds manuais (workflow_dispatch) saem como prerelease p/ não virarem
+          # a "latest" que o auto-update consome
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+          args: ${{ matrix.args }}
