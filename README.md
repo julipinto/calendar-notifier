@@ -25,6 +25,13 @@ bandeja e execução em segundo plano. Feito em **Tauri v2** (Rust + Svelte).
 Baixe o instalador da sua plataforma na página de **[Releases](../../releases)**
 (pegue a versão mais recente).
 
+### Linux — instalação rápida (curl)
+Detecta o gerenciador de pacotes e instala o `.deb` (Debian/Ubuntu) ou o
+AppImage (Arch, Fedora, etc.) com atalho no menu:
+```bash
+curl -fsSL https://raw.githubusercontent.com/julipinto/calendar-notifier/main/scripts/install.sh | sh
+```
+
 ### Windows
 1. Baixe o **`.msi`** (recomendado) ou o **`.exe`**.
 2. Execute. O **SmartScreen** pode avisar "app não reconhecido" (o app ainda não
