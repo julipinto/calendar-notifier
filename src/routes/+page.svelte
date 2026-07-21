@@ -336,14 +336,27 @@
     return q ? events.filter((e) => e.title.toLowerCase().includes(q)) : events;
   });
 
-  // LISTA: só eventos futuros (esconde os que já passaram). nowTick força refresh.
+  // dia local (meia-noite) do evento — all-day usa data UTC, com horário usa local
+  function eventDay(e: CalEvent): Date {
+    const d = new Date(e.start_ts * 1000);
+    return e.all_day
+      ? new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+      : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+  // um evento com horário que já começou (usado p/ apagar na lista)
+  function isPast(e: CalEvent): boolean {
+    return !e.all_day && e.start_ts * 1000 < Date.now();
+  }
+
+  // LISTA: hoje (inclusive já passados, apagados) + futuros. Dias anteriores só no mês.
   const groups = $derived.by(() => {
     nowTick;
-    const nowSec = Date.now() / 1000;
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
     const out: { key: string; label: string; items: CalEvent[] }[] = [];
     let cur: { key: string; label: string; items: CalEvent[] } | null = null;
     for (const e of visibleEvents) {
-      if (e.start_ts < nowSec) continue; // passados só aparecem no mês
+      if (eventDay(e) < today0) continue; // dias passados só aparecem no mês
       const { key, label } = dayInfo(e);
       if (!cur || cur.key !== key) {
         cur = { key, label, items: [] };
@@ -554,6 +567,7 @@
             {#each g.items as ev (ev.account_email + ev.id)}
               <button
                 class="event"
+                class:past={isPast(ev)}
                 onclick={() => openEvent(ev)}
                 title={ev.calendar_summary}
               >
@@ -854,6 +868,7 @@
     transition: border-color 0.15s;
   }
   .event:hover { border-color: var(--accent); }
+  .event.past { opacity: 0.5; }
   .time {
     font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 4rem;
   }
