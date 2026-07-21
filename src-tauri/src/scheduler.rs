@@ -3,6 +3,7 @@
 use chrono::{Local, TimeZone};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::store;
@@ -63,6 +64,64 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Dispara uma notificação. No Linux usa `notify-rust` (permite clique → abrir
+/// o evento e notificação "fixa"/urgente); nas demais plataformas usa o plugin
+/// do Tauri (que não expõe clique/urgência no desktop).
+#[allow(unused_variables)]
+fn notify(app: &AppHandle, title: &str, body: &str, sound_on: bool, click_url: Option<String>, sticky: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        let (title, body) = (title.to_string(), body.to_string());
+        // thread própria: wait_for_action bloqueia até clicar/fechar
+        std::thread::spawn(move || {
+            let mut n = notify_rust::Notification::new();
+            n.summary(&title).body(&body);
+            if sound_on {
+                n.sound_name("message-new-instant");
+            }
+            if sticky {
+                n.hint(notify_rust::Hint::Urgency(notify_rust::Urgency::Critical));
+                n.timeout(notify_rust::Timeout::Never);
+            }
+            if click_url.is_some() {
+                n.action("default", "Abrir");
+            }
+            match n.show() {
+                Ok(handle) => {
+                    if let Some(url) = click_url {
+                        handle.wait_for_action(|action| {
+                            if action == "default" {
+                                let _ = open::that(&url);
+                            }
+                        });
+                    }
+                }
+                Err(e) => eprintln!("[notif] falha: {e}"),
+            }
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut b = app.notification().builder().title(title).body(body);
+        if sound_on {
+            b = b.sound(NOTIF_SOUND);
+        }
+        let _ = b.show();
+    }
+}
+
+/// Monta o link do evento na conta certa (authuser evita cair na conta logada).
+fn event_click_url(html_link: &str, account_email: &str) -> Option<String> {
+    if html_link.is_empty() {
+        return None;
+    }
+    let sep = if html_link.contains('?') { "&" } else { "?" };
+    Some(format!(
+        "{html_link}{sep}authuser={}",
+        urlencoding::encode(account_email)
+    ))
 }
 
 /// Interpreta uma lista de minutos "10,2" / "10 2" → [10, 2] (desc, sem dup).
@@ -127,11 +186,8 @@ fn tick(app: &AppHandle) -> anyhow::Result<()> {
             } else {
                 format!("Começa em {mins} min")
             };
-            let mut b = app.notification().builder().title(&ev.title).body(&body);
-            if sound_on {
-                b = b.sound(NOTIF_SOUND);
-            }
-            let _ = b.show();
+            let click = event_click_url(&ev.html_link, &ev.account_email);
+            notify(app, &ev.title, &body, sound_on, click, false);
             store::add_notified_lead(&ev.account_email, &ev.calendar_id, &ev.id, lead)?;
         }
     }
@@ -223,15 +279,8 @@ fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
         lines.push(format!("+{} mais", items.len() - 10));
     }
     let title = format!("Resumo de hoje — {} evento(s)", items.len());
-    let mut b = app
-        .notification()
-        .builder()
-        .title(&title)
-        .body(&lines.join("\n"));
-    if sound_on {
-        b = b.sound(NOTIF_SOUND);
-    }
-    let _ = b.show();
+    // resumo "fixo" (urgente) no Linux p/ não sumir rápido; Windows vai p/ a Central
+    notify(app, &title, &lines.join("\n"), sound_on, None, true);
     Ok(())
 }
 

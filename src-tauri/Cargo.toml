@@ -1,6 +1,6 @@
 [package]
 name = "calendar-notifier"
-version = "0.3.4"
+version = "0.3.5"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -49,6 +49,11 @@ keyring = { version = "3", features = ["windows-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+
+# No Linux usamos notify-rust direto p/ recursos que o plugin não expõe no
+# desktop: clique na notificação (ação) e resumo "fixo" (urgência crítica).
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
 
 # zbus 5.18.0 (e 5.17.0) tem reborrows inválidos em connection/socket/command.rs
 # (transporte "Command", não usado por notificações desktop) que não compilam

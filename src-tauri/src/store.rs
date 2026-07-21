@@ -345,6 +345,7 @@ pub struct DueEvent {
     pub start_ts: i64,
     pub notified_leads: String,
     pub declined: bool,
+    pub html_link: String,
 }
 
 /// Eventos futuros (não dia-inteiro). O scheduler aplica a antecedência por
@@ -356,7 +357,7 @@ pub fn pending_notifications() -> Result<Vec<DueEvent>> {
         .as_secs() as i64;
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT account_email, calendar_id, id, title, start_ts, notified_leads, declined
+        "SELECT account_email, calendar_id, id, title, start_ts, notified_leads, declined, html_link
          FROM events
          WHERE all_day = 0 AND start_ts > ?1
          ORDER BY start_ts",
@@ -371,6 +372,7 @@ pub fn pending_notifications() -> Result<Vec<DueEvent>> {
                 start_ts: r.get(4)?,
                 notified_leads: r.get(5)?,
                 declined: r.get::<_, i64>(6)? != 0,
+                html_link: r.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
