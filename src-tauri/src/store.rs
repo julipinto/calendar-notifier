@@ -105,6 +105,16 @@ pub fn set_setting(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove as configurações cuja chave começa com `prefix`.
+pub fn delete_settings_with_prefix(prefix: &str) -> Result<()> {
+    let c = conn()?;
+    c.execute(
+        "DELETE FROM settings WHERE substr(key, 1, length(?1)) = ?1",
+        [prefix],
+    )?;
+    Ok(())
+}
+
 #[derive(Serialize, Clone)]
 pub struct Account {
     pub email: String,
@@ -325,6 +335,33 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
     Ok(())
 }
 
+/// Eventos em cache de um calendário (estado antes da sincronização, p/ o diff).
+pub fn events_for_calendar(account_email: &str, calendar_id: &str) -> Result<Vec<Event>> {
+    let c = conn()?;
+    let mut stmt = c.prepare(
+        "SELECT id, calendar_id, account_email, COALESCE(title, ''), start_ts, end_ts, all_day,
+                COALESCE(status, ''), COALESCE(html_link, ''), declined
+         FROM events WHERE account_email = ?1 AND calendar_id = ?2",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![account_email, calendar_id], |r| {
+            Ok(Event {
+                id: r.get(0)?,
+                calendar_id: r.get(1)?,
+                account_email: r.get(2)?,
+                title: r.get(3)?,
+                start_ts: r.get(4)?,
+                end_ts: r.get(5)?,
+                all_day: r.get::<_, i64>(6)? != 0,
+                status: r.get(7)?,
+                html_link: r.get(8)?,
+                declined: r.get::<_, i64>(9)? != 0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Remove todos os eventos de um calendário (usado ao desmarcar).
 pub fn delete_events_for_calendar(account_email: &str, calendar_id: &str) -> Result<()> {
     let c = conn()?;
@@ -447,11 +484,12 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
     Ok(rows)
 }
 
-/// Item simples para o resumo diário (título + início + dia-inteiro).
+/// Item simples para o resumo diário (título + início/fim + dia-inteiro).
 #[derive(Clone)]
 pub struct SummaryItem {
     pub title: String,
     pub start_ts: i64,
+    pub end_ts: i64,
     pub all_day: bool,
 }
 
@@ -459,7 +497,7 @@ pub struct SummaryItem {
 pub fn events_in_range(from: i64, to: i64) -> Result<Vec<SummaryItem>> {
     let c = conn()?;
     let mut stmt = c.prepare(
-        "SELECT title, start_ts, all_day FROM events
+        "SELECT title, start_ts, end_ts, all_day FROM events
          WHERE start_ts >= ?1 AND start_ts < ?2 ORDER BY start_ts",
     )?;
     let rows = stmt
@@ -467,7 +505,8 @@ pub fn events_in_range(from: i64, to: i64) -> Result<Vec<SummaryItem>> {
             Ok(SummaryItem {
                 title: r.get(0)?,
                 start_ts: r.get(1)?,
-                all_day: r.get::<_, i64>(2)? != 0,
+                end_ts: r.get(2)?,
+                all_day: r.get::<_, i64>(3)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

@@ -222,6 +222,7 @@ pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
 pub fn remove_account(email: String) -> Result<(), String> {
     secrets::delete_refresh_token(&email).map_err(|e| e.to_string())?;
     store::delete_account(&email).map_err(|e| e.to_string())?;
+    store::delete_settings_with_prefix(&format!("synced:{email}:")).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -284,6 +285,7 @@ pub fn set_calendar_selected(
     store::set_calendar_selected(&email, &calendar_id, selected).map_err(|e| e.to_string())?;
     if !selected {
         store::delete_events_for_calendar(&email, &calendar_id).map_err(|e| e.to_string())?;
+        store::set_setting(&synced_key(&email, &calendar_id), "").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -391,9 +393,26 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
+/// Chave que marca que o calendário já teve uma sincronização completa
+/// (antes disso não há base p/ comparar — evita notificar tudo como "novo").
+fn synced_key(email: &str, calendar_id: &str) -> String {
+    format!("synced:{email}:{calendar_id}")
+}
+
+/// Evita duas sincronizações simultâneas (poller + tray + botão), que
+/// comparariam contra o mesmo cache e duplicariam as notificações de mudança.
+static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Núcleo da sincronização (janela de 30d) de todos os calendários marcados.
-/// Reusado pelo comando `sync_now` e pelo poller automático.
-pub(crate) async fn do_sync() -> Result<u32, String> {
+/// Reusado pelo comando `sync_now`, pelo tray e pelo poller automático.
+/// Mudanças em eventos de hoje viram notificações "[Sync] ...".
+pub(crate) async fn do_sync(app: &AppHandle) -> Result<u32, String> {
+    let _guard = SYNC_LOCK.lock().await;
+    let today = chrono::Local::now().date_naive();
+    let ignore_declined = pref_bool("ignore_declined", true);
+    let ignore_all_day = pref_bool("ignore_all_day", false);
+    let mut changes: Vec<scheduler::SyncChange> = Vec::new();
+
     let cals = store::selected_calendars().map_err(|e| e.to_string())?;
     let mut by_acct: HashMap<String, Vec<store::Calendar>> = HashMap::new();
     for c in cals {
@@ -432,7 +451,25 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
                         })
                         .collect();
                     total += mapped.len() as u32;
+                    let key = synced_key(&email, &c.id);
+                    let had_base = store::get_setting(&key, "").unwrap_or_default() == "1";
+                    let old = if had_base {
+                        store::events_for_calendar(&email, &c.id).map_err(|e| e.to_string())?
+                    } else {
+                        Vec::new()
+                    };
                     store::replace_events(&email, &c.id, &mapped).map_err(|e| e.to_string())?;
+                    if had_base {
+                        changes.extend(scheduler::diff_today(
+                            &old,
+                            &mapped,
+                            today,
+                            ignore_declined,
+                            ignore_all_day,
+                        ));
+                    } else {
+                        let _ = store::set_setting(&key, "1");
+                    }
                 }
                 Err(e) => last_err = Some(friendly_err(&e)),
             }
@@ -443,6 +480,7 @@ pub(crate) async fn do_sync() -> Result<u32, String> {
         .unwrap_or_default()
         .as_secs();
     let _ = store::set_setting("last_sync_ts", &now.to_string());
+    scheduler::notify_sync_changes(app, &changes);
     // se NADA sincronizou e houve erro, propaga (ex.: todas as contas precisam reconectar)
     if total == 0 {
         if let Some(e) = last_err {
@@ -463,8 +501,8 @@ pub fn get_last_sync() -> Result<i64, String> {
 
 /// Sincroniza os eventos de todos os calendários marcados (acionado pela UI).
 #[tauri::command]
-pub async fn sync_now() -> Result<u32, String> {
-    do_sync().await
+pub async fn sync_now(app: AppHandle) -> Result<u32, String> {
+    do_sync(&app).await
 }
 
 /// Intervalo do polling automático (minutos).

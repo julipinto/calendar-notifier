@@ -39,7 +39,7 @@ pub fn start(app: AppHandle) {
 pub fn start_poller(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            match crate::commands::do_sync().await {
+            match crate::commands::do_sync(&app).await {
                 Ok(n) => {
                     let _ = app.emit("events-updated", n);
                     crate::tray::update_tray(&app);
@@ -211,6 +211,126 @@ fn event_day(start_ts: i64, all_day: bool) -> chrono::NaiveDate {
     }
 }
 
+fn hhmm(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .unwrap_or_default()
+        .with_timezone(&Local)
+        .format("%H:%M")
+        .to_string()
+}
+
+/// "09:00–10:00" (só o início se não houver fim válido).
+fn time_range(start_ts: i64, end_ts: i64) -> String {
+    if end_ts > start_ts {
+        format!("{}–{}", hhmm(start_ts), hhmm(end_ts))
+    } else {
+        hhmm(start_ts)
+    }
+}
+
+/// Descreve quando o evento acontece, relativo a `today`: "14:00–15:00",
+/// "30/09 às 14:00–15:00", "dia inteiro", "30/09 (dia inteiro)".
+fn when_label(ev: &store::Event, today: chrono::NaiveDate) -> String {
+    let day = event_day(ev.start_ts, ev.all_day);
+    let time = if ev.all_day {
+        "dia inteiro".to_string()
+    } else {
+        time_range(ev.start_ts, ev.end_ts)
+    };
+    if day == today {
+        time
+    } else if ev.all_day {
+        format!("{} ({time})", day.format("%d/%m"))
+    } else {
+        format!("{} às {time}", day.format("%d/%m"))
+    }
+}
+
+/// Mudança detectada na sincronização envolvendo um evento de hoje.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncChange {
+    pub title: String,
+    pub body: String,
+    pub click_url: Option<String>,
+}
+
+/// Compara o cache anterior (`old`) com o recém-buscado (`new`) de um calendário
+/// e devolve as mudanças que envolvem `today` (antes ou depois): evento novo,
+/// excluído, com horário alterado ou movido para/de outro dia.
+pub fn diff_today(
+    old: &[store::Event],
+    new: &[store::Event],
+    today: chrono::NaiveDate,
+    ignore_declined: bool,
+    ignore_all_day: bool,
+) -> Vec<SyncChange> {
+    use std::collections::HashMap;
+    let is_today = |e: &store::Event| event_day(e.start_ts, e.all_day) == today;
+    let skip = |e: &store::Event| (ignore_declined && e.declined) || (ignore_all_day && e.all_day);
+    let change = |e: &store::Event, body: String| SyncChange {
+        title: format!("[Sync] {}", e.title),
+        body,
+        click_url: event_click_url(&e.html_link, &e.account_email),
+    };
+
+    let old_by_id: HashMap<&str, &store::Event> = old.iter().map(|e| (e.id.as_str(), e)).collect();
+    let new_ids: std::collections::HashSet<&str> = new.iter().map(|e| e.id.as_str()).collect();
+    let mut out = Vec::new();
+
+    for n in new {
+        match old_by_id.get(n.id.as_str()) {
+            None => {
+                if is_today(n) && !skip(n) {
+                    out.push(change(n, format!("Novo evento hoje: {}", when_label(n, today))));
+                }
+            }
+            Some(o) => {
+                if !(is_today(o) || is_today(n)) || skip(n) {
+                    continue;
+                }
+                if o.start_ts != n.start_ts || o.all_day != n.all_day {
+                    out.push(change(
+                        n,
+                        format!(
+                            "Migrou para {} (era {})",
+                            when_label(n, today),
+                            when_label(o, today)
+                        ),
+                    ));
+                } else if o.end_ts != n.end_ts && !n.all_day {
+                    out.push(change(
+                        n,
+                        format!("Agora vai até {} (era até {})", hhmm(n.end_ts), hhmm(o.end_ts)),
+                    ));
+                }
+            }
+        }
+    }
+    for o in old {
+        if !new_ids.contains(o.id.as_str()) && is_today(o) && !skip(o) {
+            out.push(SyncChange {
+                title: format!("[Sync] {}", o.title),
+                body: format!("Foi excluído (era {})", when_label(o, today)),
+                click_url: None,
+            });
+        }
+    }
+    out
+}
+
+/// Notifica cada mudança detectada na sincronização.
+pub fn notify_sync_changes(app: &AppHandle, changes: &[SyncChange]) {
+    if changes.is_empty() {
+        return;
+    }
+    let sound_on = store::get_setting("sound_enabled", "true")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    for c in changes {
+        notify(app, &c.title, &c.body, sound_on, c.click_url.clone(), false);
+    }
+}
+
 /// Uma vez por dia, no horário configurado, notifica o resumo dos eventos de hoje
 /// (todos os tipos). Só dispara se houver eventos. Marca o dia como enviado.
 fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
@@ -268,11 +388,7 @@ fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
         if it.all_day {
             lines.push(format!("• {}", it.title));
         } else {
-            let hm = chrono::DateTime::from_timestamp(it.start_ts, 0)
-                .unwrap_or_default()
-                .with_timezone(&Local)
-                .format("%H:%M");
-            lines.push(format!("{hm} {}", it.title));
+            lines.push(format!("{} {}", time_range(it.start_ts, it.end_ts), it.title));
         }
     }
     if items.len() > 10 {
@@ -286,7 +402,65 @@ fn maybe_daily_summary(app: &AppHandle, sound_on: bool) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_reminders;
+    use super::{diff_today, parse_reminders};
+    use crate::store::Event;
+    use chrono::{Local, NaiveDate, TimeZone};
+
+    fn ts(d: NaiveDate, h: u32, m: u32) -> i64 {
+        Local
+            .from_local_datetime(&d.and_hms_opt(h, m, 0).unwrap())
+            .single()
+            .unwrap()
+            .timestamp()
+    }
+
+    fn ev(id: &str, title: &str, start: i64, end: i64) -> Event {
+        Event {
+            id: id.into(),
+            calendar_id: "c".into(),
+            account_email: "a@x.com".into(),
+            title: title.into(),
+            start_ts: start,
+            end_ts: end,
+            all_day: false,
+            status: "confirmed".into(),
+            html_link: String::new(),
+            declined: false,
+        }
+    }
+
+    #[test]
+    fn diff_today_detects_moves_deletes_and_new() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 28).unwrap();
+        let tomorrow = today.succ_opt().unwrap();
+        let old = vec![
+            ev("1", "Cupom de desconto", ts(today, 10, 0), ts(today, 11, 0)),
+            ev("2", "Daily", ts(today, 9, 0), ts(today, 9, 15)),
+            ev("3", "1:1", ts(today, 15, 0), ts(today, 15, 30)),
+            ev("4", "Sem mudança", ts(today, 16, 0), ts(today, 17, 0)),
+            ev("5", "Amanhã", ts(tomorrow, 10, 0), ts(tomorrow, 11, 0)),
+        ];
+        let new = vec![
+            ev("1", "Cupom de desconto", ts(today, 14, 0), ts(today, 15, 0)),
+            ev("3", "1:1", ts(tomorrow, 15, 0), ts(tomorrow, 15, 30)),
+            ev("4", "Sem mudança", ts(today, 16, 0), ts(today, 17, 0)),
+            ev("5", "Amanhã", ts(tomorrow, 11, 0), ts(tomorrow, 12, 0)),
+            ev("6", "Novo", ts(today, 18, 0), ts(today, 18, 30)),
+        ];
+        let got: Vec<(String, String)> = diff_today(&old, &new, today, true, false)
+            .into_iter()
+            .map(|c| (c.title, c.body))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("[Sync] Cupom de desconto".into(), "Migrou para 14:00–15:00 (era 10:00–11:00)".into()),
+                ("[Sync] 1:1".into(), "Migrou para 29/09 às 15:00–15:30 (era 15:00–15:30)".into()),
+                ("[Sync] Novo".into(), "Novo evento hoje: 18:00–18:30".into()),
+                ("[Sync] Daily".into(), "Foi excluído (era 09:00–09:15)".into()),
+            ]
+        );
+    }
 
     #[test]
     fn reminders_sorted_desc_dedup_and_parse() {

@@ -291,6 +291,15 @@
       minute: "2-digit",
     });
   }
+  /** "09:00–10:00" (início–fim) para a lista. */
+  function fmtRange(e: CalEvent): string {
+    if (e.all_day || e.end_ts <= e.start_ts) return fmtTime(e);
+    const end = new Date(e.end_ts * 1000).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${fmtTime(e)}–${end}`;
+  }
   function dayInfo(e: CalEvent): { key: string; label: string } {
     const d = new Date(e.start_ts * 1000);
     const y = e.all_day ? d.getUTCFullYear() : d.getFullYear();
@@ -571,7 +580,7 @@
                 onclick={() => openEvent(ev)}
                 title={ev.calendar_summary}
               >
-                <span class="time">{fmtTime(ev)}</span>
+                <span class="time">{fmtRange(ev)}</span>
                 <span class="dot" style="background:{dotColor(ev.color)}"></span>
                 <span class="ev-main">
                   <span class="ev-title">{ev.title}</span>
@@ -870,7 +879,7 @@
   .event:hover { border-color: var(--accent); }
   .event.past { opacity: 0.5; }
   .time {
-    font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 4rem;
+    font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 5.6rem;
   }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .ev-main { display: flex; flex-direction: column; min-width: 0; gap: 0.05rem; }

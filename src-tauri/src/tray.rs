@@ -20,7 +20,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "sync" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = crate::commands::do_sync().await;
+                    let _ = crate::commands::do_sync(&app).await;
                     let _ = app.emit("events-updated", 0);
                     update_tray(&app);
                 });
