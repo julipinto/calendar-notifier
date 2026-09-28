@@ -26,6 +26,7 @@
     html_link: string;
     color: string;
     calendar_summary: string;
+    meet_link: string;
   };
 
   let accounts = $state<Account[]>([]);
@@ -333,6 +334,19 @@
     return c && c.startsWith("#") ? c : ACCENT;
   }
   // abre o evento na CONTA certa (authuser evita o Google redirecionar p/ a conta logada)
+  /** Tem videochamada e ainda não terminou? */
+  function hasMeet(e: CalEvent): boolean {
+    return !!e.meet_link && e.end_ts * 1000 > Date.now();
+  }
+  /** Abre a chamada; no Meet força a conta certa (authuser), como no evento. */
+  function openMeet(e: CalEvent) {
+    let url = e.meet_link;
+    if (url.includes("meet.google.com")) {
+      const sep = url.includes("?") ? "&" : "?";
+      url = `${url}${sep}authuser=${encodeURIComponent(e.account_email)}`;
+    }
+    openUrl(url);
+  }
   function openEvent(e: CalEvent) {
     if (!e.html_link) return;
     const sep = e.html_link.includes("?") ? "&" : "?";
@@ -574,9 +588,11 @@
           <div class="day-group">
             <h2 class="day-label">{g.label}</h2>
             {#each g.items as ev (ev.account_email + ev.id)}
+              <div class="event-row">
               <button
                 class="event"
                 class:past={isPast(ev)}
+                class:with-meet={hasMeet(ev)}
                 onclick={() => openEvent(ev)}
                 title={ev.calendar_summary}
               >
@@ -591,6 +607,13 @@
                   {/if}
                 </span>
               </button>
+              {#if hasMeet(ev)}
+                <button class="meet" onclick={() => openMeet(ev)} title="Entrar na chamada">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3.5l4.3 3.4a.5.5 0 0 0 .7-.4V7.5a.5.5 0 0 0-.8-.4Z"/></svg>
+                  {ev.meet_link.includes("meet.google.com") ? "Meet" : "Entrar"}
+                </button>
+              {/if}
+              </div>
             {/each}
           </div>
         {/each}
@@ -878,6 +901,17 @@
   }
   .event:hover { border-color: var(--accent); }
   .event.past { opacity: 0.5; }
+  .event-row { position: relative; }
+  .event.with-meet { padding-right: 5.2rem; }
+  .meet {
+    position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%);
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font: inherit; font-size: 0.75rem; font-weight: 600;
+    padding: 0.3em 0.6em; border-radius: 999px; cursor: pointer;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  }
+  .meet:hover { background: var(--accent); color: var(--card); }
+  .meet svg { width: 14px; height: 14px; fill: currentColor; }
   .time {
     font-variant-numeric: tabular-nums; font-size: 0.8rem; color: var(--muted); min-width: 5.6rem;
   }

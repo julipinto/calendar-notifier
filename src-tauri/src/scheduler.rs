@@ -426,6 +426,7 @@ mod tests {
             status: "confirmed".into(),
             html_link: String::new(),
             declined: false,
+            meet_link: String::new(),
         }
     }
 

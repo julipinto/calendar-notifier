@@ -51,6 +51,7 @@ pub fn init() -> Result<()> {
             notified      INTEGER NOT NULL DEFAULT 0,
             declined      INTEGER NOT NULL DEFAULT 0,
             notified_leads TEXT NOT NULL DEFAULT '',
+            meet_link     TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (account_email, calendar_id, id)
         );
         CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_ts);
@@ -78,6 +79,10 @@ pub fn init() -> Result<()> {
     );
     let _ = c.execute(
         "ALTER TABLE events ADD COLUMN notified_leads TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = c.execute(
+        "ALTER TABLE events ADD COLUMN meet_link TEXT NOT NULL DEFAULT ''",
         [],
     );
     Ok(())
@@ -276,6 +281,7 @@ pub struct Event {
     pub status: String,
     pub html_link: String,
     pub declined: bool,
+    pub meet_link: String,
 }
 
 /// Sincroniza os eventos de um calendário: faz upsert dos recém-buscados
@@ -288,8 +294,8 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
     {
         let mut up = tx.prepare(
             "INSERT INTO events
-             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link, declined, notified_leads)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')
+             (id, calendar_id, account_email, title, start_ts, end_ts, all_day, status, html_link, declined, notified_leads, meet_link)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '', ?11)
              ON CONFLICT(account_email, calendar_id, id) DO UPDATE SET
                 title = excluded.title,
                 end_ts = excluded.end_ts,
@@ -297,6 +303,7 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
                 status = excluded.status,
                 html_link = excluded.html_link,
                 declined = excluded.declined,
+                meet_link = excluded.meet_link,
                 -- se o horário de início mudou, zera os avisos já disparados
                 notified_leads = CASE WHEN events.start_ts != excluded.start_ts THEN '' ELSE events.notified_leads END,
                 start_ts = excluded.start_ts",
@@ -313,6 +320,7 @@ pub fn replace_events(account_email: &str, calendar_id: &str, events: &[Event]) 
                 e.status,
                 e.html_link,
                 e.declined as i64,
+                e.meet_link,
             ])?;
         }
         // remove eventos que não vieram nesta sincronização
@@ -340,7 +348,7 @@ pub fn events_for_calendar(account_email: &str, calendar_id: &str) -> Result<Vec
     let c = conn()?;
     let mut stmt = c.prepare(
         "SELECT id, calendar_id, account_email, COALESCE(title, ''), start_ts, end_ts, all_day,
-                COALESCE(status, ''), COALESCE(html_link, ''), declined
+                COALESCE(status, ''), COALESCE(html_link, ''), declined, meet_link
          FROM events WHERE account_email = ?1 AND calendar_id = ?2",
     )?;
     let rows = stmt
@@ -356,6 +364,7 @@ pub fn events_for_calendar(account_email: &str, calendar_id: &str) -> Result<Vec
                 status: r.get(7)?,
                 html_link: r.get(8)?,
                 declined: r.get::<_, i64>(9)? != 0,
+                meet_link: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -446,6 +455,7 @@ pub struct UpcomingEvent {
     pub color: String,
     pub calendar_summary: String,
     pub declined: bool,
+    pub meet_link: String,
 }
 
 /// Próximos eventos (a partir de agora), ordenados por início, com a cor/nome
@@ -458,7 +468,7 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
     let c = conn()?;
     let mut stmt = c.prepare(
         "SELECT e.id, e.account_email, e.title, e.start_ts, e.end_ts, e.all_day,
-                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined
+                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined, e.meet_link
          FROM events e
          LEFT JOIN calendars c
            ON c.account_email = e.account_email AND c.id = e.calendar_id
@@ -478,6 +488,7 @@ pub fn upcoming_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
                 color: r.get(7)?,
                 calendar_summary: r.get(8)?,
                 declined: r.get::<_, i64>(9)? != 0,
+                meet_link: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -519,7 +530,7 @@ pub fn all_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
     let c = conn()?;
     let mut stmt = c.prepare(
         "SELECT e.id, e.account_email, e.title, e.start_ts, e.end_ts, e.all_day,
-                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined
+                e.html_link, COALESCE(c.color, ''), COALESCE(c.summary, ''), e.declined, e.meet_link
          FROM events e
          LEFT JOIN calendars c
            ON c.account_email = e.account_email AND c.id = e.calendar_id
@@ -538,6 +549,7 @@ pub fn all_events(limit: i64) -> Result<Vec<UpcomingEvent>> {
                 color: r.get(7)?,
                 calendar_summary: r.get(8)?,
                 declined: r.get::<_, i64>(9)? != 0,
+                meet_link: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

@@ -448,6 +448,7 @@ pub(crate) async fn do_sync(app: &AppHandle) -> Result<u32, String> {
                             status: e.status,
                             html_link: e.html_link,
                             declined: e.declined,
+                            meet_link: e.meet_link,
                         })
                         .collect();
                     total += mapped.len() as u32;

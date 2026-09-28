@@ -52,6 +52,8 @@ pub struct EventItem {
     pub status: String,
     pub html_link: String,
     pub declined: bool,
+    /// link da videochamada (Meet ou outra conferência integrada), vazio se não houver
+    pub meet_link: String,
 }
 
 /// Busca os eventos de um calendário numa janela [time_min, time_max].
@@ -147,7 +149,23 @@ fn parse_event(e: RawEvent) -> Option<EventItem> {
         status: e.status.unwrap_or_default(),
         html_link: e.html_link.unwrap_or_default(),
         declined,
+        meet_link: meet_link(e.hangout_link, e.conference_data),
     })
+}
+
+/// Link da videochamada: `hangoutLink` (Meet) ou, na falta dele, a entrada de
+/// vídeo do `conferenceData` (Zoom/Teams integrados ao Calendar).
+fn meet_link(hangout: Option<String>, conf: Option<ConferenceData>) -> String {
+    hangout
+        .filter(|l| !l.is_empty())
+        .or_else(|| {
+            conf?
+                .entry_points
+                .into_iter()
+                .find(|p| p.entry_point_type.as_deref() == Some("video"))
+                .and_then(|p| p.uri)
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -184,6 +202,21 @@ struct RawEvent {
     end: Option<EventTime>,
     #[serde(default)]
     attendees: Option<Vec<Attendee>>,
+    #[serde(rename = "hangoutLink")]
+    hangout_link: Option<String>,
+    #[serde(rename = "conferenceData")]
+    conference_data: Option<ConferenceData>,
+}
+#[derive(Deserialize)]
+struct ConferenceData {
+    #[serde(rename = "entryPoints", default)]
+    entry_points: Vec<EntryPoint>,
+}
+#[derive(Deserialize)]
+struct EntryPoint {
+    #[serde(rename = "entryPointType")]
+    entry_point_type: Option<String>,
+    uri: Option<String>,
 }
 #[derive(Deserialize)]
 struct Attendee {
